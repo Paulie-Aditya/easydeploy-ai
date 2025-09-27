@@ -1,4 +1,5 @@
 import '../styles/globals.css';
+import '@rainbow-me/rainbowkit/styles.css';
 import { WagmiProvider, createConfig, http } from 'wagmi';
 import { sepolia } from 'wagmi/chains';
 import { RainbowKitProvider, getDefaultWallets } from '@rainbow-me/rainbowkit';
