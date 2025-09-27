@@ -18,6 +18,7 @@ const nextConfig = {
         util: false,
         url: false,
         assert: false,
+        '@react-native-async-storage/async-storage': './lib/storage.js',
         http: false,
         https: false,
         os: false,

@@ -24,6 +24,11 @@
     --input: 217.2 32.6% 17.5%;
     --ring: 212.7 26.8% 83.9%;
     --radius: 0.5rem;
+
+    /* Brand Colors */
+    --brand: 199 89% 48%;
+    --brand-foreground: 0 0% 100%;
+    --accent: 280 100% 60%;
   }
 
   .dark {
@@ -54,7 +59,30 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+  }
+  /* Glass card styling */
+  .glass-card {
+    @apply backdrop-blur-md bg-opacity-10 bg-white border border-white/10;
+  }
+  /* Button gradients */
+  .btn-gradient {
+    @apply bg-gradient-to-r from-[hsl(var(--brand))] to-[hsl(var(--accent))] text-white;
+  }
+  /* Custom scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-background;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-muted rounded-full;
+  }
+  /* Input focus styles */
+  input:focus, textarea:focus {
+    @apply ring-2 ring-[hsl(var(--brand))] outline-none;
   }
 }
 

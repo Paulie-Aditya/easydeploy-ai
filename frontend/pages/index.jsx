@@ -22,6 +22,8 @@ export default function Home() {
   const [deployed, setDeployed] = useState(null);
   const [loading, setLoading] = useState(false);
   const [ensSubname, setEnsSubname] = useState("");
+  const [activeStep, setActiveStep] = useState(0);
+  const [progress, setProgress] = useState(0);
 
   const { address } = useAccount();
   const { data: walletClient } = useWalletClient();

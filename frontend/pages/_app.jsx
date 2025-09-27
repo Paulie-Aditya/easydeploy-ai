@@ -1,5 +1,7 @@
 import '../styles/globals.css';
 import '@rainbow-me/rainbowkit/styles.css';
+// Ensure dark mode for modern look
+import { ThemeProvider } from 'next-themes';
 import { WagmiProvider, createConfig, http } from 'wagmi';
 import { sepolia } from 'wagmi/chains';
 import { RainbowKitProvider, getDefaultWallets } from '@rainbow-me/rainbowkit';
@@ -41,6 +43,28 @@ const config = createConfig({
 const queryClient = new QueryClient();
 
 export default function MyApp({ Component, pageProps }) {
+  // Handle Chrome extension errors globally
+  if (typeof window !== 'undefined') {
+    window.addEventListener('error', (event) => {
+      if (event.error && event.error.message && 
+          event.error.message.includes('chrome.runtime.sendMessage')) {
+        console.warn('Chrome extension error caught and handled:', event.error);
+        event.preventDefault();
+      }
+    });
+  }
+
+  return (
+    <WagmiProvider config={config}>
+      <QueryClientProvider client={queryClient}>
+        <RainbowKitProvider chains={chains}>
+          <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+            <Component {...pageProps} />
+          </ThemeProvider>
+        </RainbowKitProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
+  );
   // Handle Chrome extension errors globally
   if (typeof window !== 'undefined') {
     window.addEventListener('error', (event) => {
