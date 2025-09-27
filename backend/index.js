@@ -19,7 +19,7 @@ const cors = require('cors');
 const { GoogleGenAI } = require('@google/genai'); // Gemini SDK
 const { NFTStorage, File } = require('nft.storage'); // will try to integrate dall-e here
 const axios = require('axios');
-const { ethers } = require('ethers');
+const ethers = require('ethers');
 const Web3 = require('web3');
 const HDWalletProvider = require('@truffle/hdwallet-provider');
 const namehash = require("@ensdomains/eth-ens-namehash"); // npm i @ensdomains/eth-ens-namehash
@@ -70,6 +70,9 @@ const ENS_REGISTRY_ABI = [
 const RESOLVER_ABI = [
   "function setAddr(bytes32 node, address addr) external",
   "function addr(bytes32 node) view returns (address)",
+];
+const BaseRegistrarABI = [
+  "function ownerOf(uint256 tokenId) view returns (address)"
 ];
 const ENS_REGISTRY_ADDRESS = process.env.ENS_REGISTRY_ADDRESS || "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"; // docs list this for Sepolia/mainnet fallback
 
@@ -162,6 +165,46 @@ app.post('/upload-logo', async (req, res) => {
 // ENS subname creation endpoint (must be called after token is deployed)
 // body: { label: "latte", ownerAddress: "0x...", tokenAddress: "0x...", parentName: "easydeployai.eth" }
 
+async function verifyEnsOwner(parentName, wallet, provider) {
+  const ens = new ethers.Contract(ENS_REGISTRY_ADDRESS, ENS_REGISTRY_ABI, wallet);
+  
+  const parentNode = namehash.hash(parentName);
+  const currentOwner = await ens.owner(parentNode);
+  // Case 1: direct ownership
+  if (currentOwner && currentOwner.toLowerCase() === wallet.address.toLowerCase()) {
+    return true;
+  }
+
+  console.log("not direct owner")
+
+  // Case 2: registrar owns it → check who the registrant is
+  try {
+    const baseRegistrar = new ethers.Contract(
+      currentOwner,
+      BaseRegistrarABI,
+      provider
+    );
+
+    const label = parentName.split(".")[0]; // e.g. "easydeployai" from "easydeployai.eth"
+    const tokenId = ethers.keccak256(ethers.toUtf8Bytes(label));
+
+    const registrant = await baseRegistrar.ownerOf(tokenId);
+
+    if (registrant.toLowerCase() === wallet.address.toLowerCase()) {
+      return true;
+    }
+    else{
+      console.log("Registrant: "+ registrant.toLowerCase() );
+      console.log("Wallet rn: "+ wallet.address)
+      return false;
+    }
+  } catch (err) {
+    console.log("Registrar ownership check failed:", err.message);
+  }
+
+  return false;
+}
+
 app.post("/ens/register-subname", async (req, res) => {
   try {
     const { label, ownerAddress, tokenAddress, parentName = "easydeployai.eth" } = req.body;
@@ -183,15 +226,18 @@ app.post("/ens/register-subname", async (req, res) => {
       return res.status(500).json({ error: "Server missing SEPOLIA_RPC_URL or ENS_OWNER_PRIVATE_KEY env vars" });
     }
     const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
-    const wallet = new ethers.Wallet(process.env.ENS_OWNER_PRIVATE_KEY, provider);
-    const ens = new ethers.Contract(ENS_REGISTRY_ADDRESS, ENS_REGISTRY_ABI, wallet);
+    let wallet = new ethers.Wallet(process.env.ENS_OWNER_PRIVATE_KEY, provider);
+    let ens = new ethers.Contract(ENS_REGISTRY_ADDRESS, ENS_REGISTRY_ABI, wallet);
 
     // confirm backend wallet actually owns the parentName (security check)
     const parentNode = namehash.hash(parentName);
-    const currentOwner = await ens.owner(parentNode);
-    if (!currentOwner || currentOwner.toLowerCase() !== wallet.address.toLowerCase()) {
+
+    // replaced with function since some platforms keep the smart contract as owner instead of the wallet directly
+
+    const isOwner= await verifyEnsOwner(parentName, wallet, provider);
+    if (!isOwner) {
       return res.status(400).json({
-        error: `ENS owner mismatch. Backend ENS owner ${wallet.address} is not the owner of ${parentName} on Sepolia. Current owner: ${currentOwner}.`,
+        error: `ENS owner mismatch. Backend ENS owner ${wallet.address} is not the owner of ${parentName} on Sepolia.`,
       });
     }
 
