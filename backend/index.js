@@ -88,7 +88,7 @@ Return only JSON.
       contents: prompt
     });
 
-    const rawText = out?.text || out?.outputText || (out?.candidates && out.candidates[0]?.content?.parts?.[0]?.text) || null;
+    const rawText = out.candidates[0].content.parts[0].text
     if(!rawText) return res.status(500).json({ error: 'no response from LLM' });
 
     // Parse the JSON (Gemini is usually good at obeying JSON mode)
@@ -100,7 +100,7 @@ Return only JSON.
       else throw e;
     }
 
-    return res.json({ ok: true, generated: parsed, rawText: text });
+    return res.json({ ok: true, generated: parsed});
   } catch (err) {
     console.error('generate-token err', err?.response?.data || err);
     res.status(500).json({ error: String(err?.message || err) });
