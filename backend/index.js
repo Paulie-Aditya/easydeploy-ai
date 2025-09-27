@@ -3,7 +3,7 @@
  * - /generate-token -> uses Gemini to return JSON token config
  * - /upload-logo -> accepts base64 or SVG, stores on nft.storage, returns IPFS URL
  * - /1inch/quote -> proxy to 1inch quote endpoint (mainnet / polygon)
- * - /ens/resolve -> resolve ENS name for an address (uses Alchemy provider)
+ * - /ens/register-subname -> create ENS subname on Sepolia
  * - /pyth/price -> simple Hermes pull (if configured), fallback to CoinGecko
  *
  * Run:
@@ -29,10 +29,8 @@ app.use(bodyParser.json({ limit: '5mb' }));
 
 const PORT = process.env.PORT || 5001;
 
-// Gemini client (text)
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY
-});
+// Gemini (GenAI) client
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // NFT.Storage client
 const nftClient = new NFTStorage({ token: process.env.NFT_STORAGE_KEY });
@@ -70,41 +68,35 @@ app.post('/generate-token', async (req, res) => {
 
     // prompt: ask Gemini to return strict JSON (no extra text)
     const prompt = `
-You are an expert token designer. Given a user description, output STRICT JSON ONLY with the fields:
+You are an expert token designer. Given the user description, output STRICT JSON ONLY with keys:
 {
   "name": "<token name>",
   "symbol": "<SYMBOL>",
   "type": "ERC20"|"ERC721",
-  "supply": <integer>, 
+  "supply": <integer>,
   "decimals": <integer>,
   "features": { "mintable": true|false, "burnable": true|false, "pausable": true|false },
-  "description": "<1-2 sentence landing description>",
-  "suggestedLogoPrompt": "<short image prompt suitable for image generation or descriptive SVG>"
+  "description": "<1-2 sentence landing description>"
 }
 User description: "${description}"
 Return only JSON.
 `;
 
     // call Gemini
-    const r = await ai.models.generateContent({
+    const out = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt
     });
 
-    // Compatibility: some SDKs return .text or .outputText
-    const text = r?.text || r?.outputText || (r?.candidates && r.candidates[0]?.content?.parts?.[0]?.text) || null;
-    if (!text) {
-      return res.status(500).json({ error: 'no response from LLM' });
-    }
+    const rawText = out?.text || out?.outputText || (out?.candidates && out.candidates[0]?.content?.parts?.[0]?.text) || null;
+    if(!rawText) return res.status(500).json({ error: 'no response from LLM' });
 
     // Parse the JSON (Gemini is usually good at obeying JSON mode)
     let parsed;
-    try {
-      parsed = JSON.parse(text.trim());
-    } catch (e) {
-      // sometimes model adds triple backticks or extra text; extract first JSON substring
-      const match = text.match(/\{[\s\S]*\}/);
-      if (match) parsed = JSON.parse(match[0]);
+    try { parsed = JSON.parse(rawText.trim()); }
+    catch(e) {
+      const match = rawText.match(/\{[\s\S]*\}/);
+      if(match) parsed = JSON.parse(match[0]);
       else throw e;
     }
 
@@ -129,24 +121,21 @@ app.post('/upload-logo', async (req, res) => {
       const buffer = Buffer.from(base64, 'base64');
       file = new File([buffer], `${name || 'logo'}.png`, { type: 'image/png' });
     } else {
-      // svg
-      const svgBuffer = Buffer.from(imageSvg, 'utf8');
-      file = new File([svgBuffer], `${name || 'logo'}.svg`, { type: 'image/svg+xml' });
+      const buffer = Buffer.from(imageSvg, 'utf8');
+      file = new File([buffer], `${name || 'logo'}.svg`, { type: 'image/svg+xml' });
     }
 
-    const cid = await nftClient.storeDirectory([file]); // returns CID for directory; using simple path
-    // create metadata JSON and upload too
-    const metadata = {
-      name: name || 'EasyDeploy Token Logo',
-      description: description || '',
-      image: `ipfs://${cid}/` // note: exact path may differ; nft.storage stores files with paths
-    };
+    // store image
+    const cidImage = await nftClient.storeDirectory([file]);
+    const imageUri = `ipfs://${cidImage}/${file.name}`;
 
-    // store metadata as file (nft.storage has a simple put; we can use storeBlob() too)
-    const metadataFile = new File([JSON.stringify(metadata)], 'metadata.json', { type: 'application/json' });
-    const metaCid = await nftClient.storeDirectory([metadataFile]);
+    // store metadata
+    const metadata = { name: name || 'Token Logo', description: description || '', image: imageUri };
+    const metaFile = new File([JSON.stringify(metadata)], 'metadata.json', { type: 'application/json' });
+    const cidMeta = await nftClient.storeDirectory([metaFile]);
+    const metadataUri = `ipfs://${cidMeta}/metadata.json`;
 
-    return res.json({ ok: true, cid, metaCid, metadataUri: `ipfs://${metaCid}/metadata.json` });
+    return res.json({ ok: true, cidImage, imageUri, cidMeta, metadataUri });
   } catch (err) {
     console.error('upload-logo err', err);
     res.status(500).json({ error: String(err) });
@@ -183,6 +172,44 @@ app.post('/ens/register-subname', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`EasyDeploy backend listening on ${PORT}`);
+// 1inch quote (best-effort). Query: /1inch/quote?chainId=1&fromTokenAddress=...&toTokenAddress=...&amount=1000000000000000000
+app.get('/1inch/quote', async (req,res) => {
+  try {
+    const { chainId='1', fromTokenAddress, toTokenAddress, amount='1000000000000000000' } = req.query;
+    const url = `${ONEINCH_BASE}/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
+    const r = await axios.get(url);
+    return res.json({ ok:true, data: r.data });
+  } catch (err) {
+    console.warn('1inch quote err', err?.response?.data || err?.message);
+    // fallback: return a small message showing integration attempted
+    return res.status(500).json({ error: '1inch quote failed', details: err?.response?.data || err?.message });
+  }
 });
+
+// 1inch swap link helper (returns deep link to 1inch UI) - front end can open this
+app.get('/1inch/swapLink', (req,res) => {
+  const { to='', chain=137 } = req.query; // default polygon
+  const link = `https://app.1inch.io/#/${chain}/swap/ETH/${to}`;
+  res.json({ ok:true, link });
+});
+
+// Pyth price fetch (best-effort): if PYTH_HERMES_URL+PYTH_PRODUCT_ID provided, call it. Else fallback to coingecko ETH price.
+app.get('/pyth/price', async (req,res) => {
+  try {
+    const hermes = process.env.PYTH_HERMES_URL;
+    const pid = req.query.productId || process.env.PYTH_PRODUCT_ID;
+    if (!hermes || !pid) {
+      // fallback
+      const gg = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
+      return res.json({ ok:true, source:'coingecko', price: gg.data.ethereum.usd });
+    }
+    const url = `${hermes.replace(/\/$/,'')}/v2/price/latest/${pid}`;
+    const r = await axios.get(url);
+    return res.json({ ok:true, source:'pyth_hermes', raw: r.data });
+  } catch (err) {
+    console.error('pyth fetch err', err?.response?.data || err?.message);
+    res.status(500).json({ error:'pyth fetch failed', details: err?.message || err?.response?.data });
+  }
+});
+
+app.listen(PORT, () => console.log(`Backend running on ${PORT}`));

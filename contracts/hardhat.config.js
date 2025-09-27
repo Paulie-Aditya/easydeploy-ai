@@ -1,12 +1,12 @@
-require("@nomiclabs/hardhat-ethers");
-require('dotenv').config();
+import "@nomicfoundation/hardhat-ethers";
+import 'dotenv/config';
 
-module.exports = {
+export default {
   solidity: "0.8.19",
   networks: {
     sepolia: {
       url: process.env.SEPOLIA_RPC_URL,
-      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
+      accounts: process.env.DEPLOYER_PRIVATE_KEY ? [process.env.DEPLOYER_PRIVATE_KEY] : []
     }
   }
 };
