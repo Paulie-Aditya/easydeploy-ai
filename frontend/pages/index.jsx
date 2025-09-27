@@ -6,10 +6,7 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useWalletClient } from "wagmi";
 import { ethers } from "ethers";
 import { Button } from "@/components/ui/button";
-// import { Toast } from "@/components/ui/toast";
-// import { SuccessPopup } from "@/components/ui/success-popup";
-// import { LoadingSpinner } from "@/components/ui/loading-spinner";
-// import { motion, useScroll, useInView } from "framer-motion";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 
 // Minimal ABI for factory
 const FACTORY_ABI = [
@@ -26,11 +23,6 @@ export default function Home() {
   const [loadingGenerate, setLoadingGenerate] = useState(false);
   const [loadingDeploy, setLoadingDeploy] = useState(false);
   const [ensSubname, setEnsSubname] = useState("");
-  const [toast, setToast] = useState(null);
-  const [showSuccess, setShowSuccess] = useState(false);
-  
-  // const tokenPreviewRef = useRef(null);
-  // const isPreviewInView = useInView(tokenPreviewRef);
   const [activeStep, setActiveStep] = useState(0);
   const [progress, setProgress] = useState(0);
 
@@ -46,18 +38,12 @@ export default function Home() {
     try {
       const r = await axios.post(`${BACKEND}/generate-token`, { description });
       setGen(r.data.generated);
-      setActiveStep(1);
-      
-      // Show toast and scroll to preview
-      setToast({ message: 'Token specifications generated!', type: 'success' });
-      // if (!isPreviewInView && tokenPreviewRef.current) {
-      //   tokenPreviewRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // }
     } catch (e) {
-      setToast({ message: `Generation failed: ${e?.response?.data?.error || e.message}`, type: 'error' });
+      alert("Generate failed: " + (e?.response?.data?.error || e.message));
     } finally {
       setLoadingGenerate(false);
     }
+  }
 
   function createSvg(symbol) {
     const safe = (symbol || "TKN").slice(0, 4);
@@ -171,14 +157,13 @@ async function deploy() {
         parentName: "easydeployai.eth",
       });
       setEnsSubname(ensRes.data.subname);
-      setShowSuccess(true);
-      setToast({ message: `ENS subname created: ${ensRes.data.subname}`, type: 'success' });
+      alert("Deployed and ENS subname created: " + ensRes.data.subname);
     } catch (ensErr) {
       console.warn("ENS creation failed:", ensErr?.response?.data?.error || ensErr.message);
-      setToast({
-        message: `Token deployed but ENS creation failed: ${ensErr?.response?.data?.error || ensErr.message}`,
-        type: 'error'
-      });
+      alert(
+        "Token deployed but ENS creation failed: " +
+          (ensErr?.response?.data?.error || ensErr.message)
+      );
     }
   } catch (e) {
     console.error(e);
@@ -452,55 +437,6 @@ async function deploy() {
           </div>
         )}
       </section>
-      {/* Toasts */}
-      {/* {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )} */}
-
-      {/* Success Popup */}
-      {/* {showSuccess && deployed && (
-        <SuccessPopup
-          title="🎉 Token Deployed Successfully!"
-          message={
-            <div className="space-y-4">
-              <p>Your token has been deployed and is ready for trading!</p>
-              <div className="bg-card/30 p-4 rounded-lg space-y-2">
-                <div>
-                  <span className="text-muted-foreground">Token Address:</span>
-                  <code className="block text-xs bg-background/50 p-2 rounded mt-1">{deployed.address}</code>
-                </div>
-                {ensSubname && (
-                  <div>
-                    <span className="text-muted-foreground">ENS Name:</span>
-                    <code className="block text-xs bg-background/50 p-2 rounded mt-1">{ensSubname}</code>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-3 mt-4">
-                <Button
-                  className="flex-1"
-                  variant="secondary"
-                  onClick={() => window.open(`https://sepolia.etherscan.io/address/${deployed.address}`, '_blank')}
-                >
-                  View on Etherscan
-                </Button>
-                <Button
-                  className="flex-1"
-                  variant="secondary"
-                  onClick={() => window.open(`https://app.1inch.io/#/1/swap/ETH/${deployed.address}`, '_blank')}
-                >
-                  Trade on 1inch
-                </Button>
-              </div>
-            </div>
-          }
-          onClose={() => setShowSuccess(false)}
-        />
-      )} */}
     </main>
   );
-}}
+}
