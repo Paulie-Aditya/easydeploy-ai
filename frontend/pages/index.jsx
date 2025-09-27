@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import axios from "axios";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import { useAccount, useWalletClient } from "wagmi";
@@ -12,6 +12,7 @@ import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { SuccessPopup } from "@/components/ui/success-popup";
 import { motion, useScroll, useInView } from "framer-motion";
 import Confetti from "react-confetti";
+import confetti from "canvas-confetti";
 
 // Minimal ABI for factory
 const FACTORY_ABI = [
@@ -51,14 +52,42 @@ export default function Home() {
       const r = await axios.post(`${BACKEND}/generate-token`, { description });
       setGen(r.data.generated);
 
-      // Trigger confetti animation for successful generation
-      setTimeout(() => {
-        setConfettiActive(true);
-        setTimeout(() => setConfettiActive(false), 2000);
-      }, 500);
+      // Trigger screen shake and confetti animation
+      const screen = document.querySelector("main");
+      if (screen) {
+        screen.classList.add("shake");
+        setTimeout(() => screen.classList.remove("shake"), 500);
+      }
 
-      // Scroll to token preview
-      tokenPreviewRef.current?.scrollIntoView({ behavior: "smooth" });
+      const duration = 5 * 1000;
+      const animationEnd = Date.now() + duration;
+      const defaults = { startVelocity: 30, spread: 360, ticks: 60, zIndex: 0 };
+
+      function randomInRange(min, max) {
+        return Math.random() * (max - min) + min;
+      }
+
+      const interval = setInterval(function () {
+        const timeLeft = animationEnd - Date.now();
+
+        if (timeLeft <= 0) {
+          return clearInterval(interval);
+        }
+
+        const particleCount = 20 * (timeLeft / duration);
+        confetti({
+          ...defaults,
+          particleCount,
+          origin: { x: randomInRange(0.1, 0.3), y: Math.random() - 0.2 },
+          colors: ["#ff69b4", "#00ffff", "#ff1493", "#7fffd4", "#ff4500"],
+        });
+        confetti({
+          ...defaults,
+          particleCount,
+          origin: { x: randomInRange(0.7, 0.9), y: Math.random() - 0.2 },
+          colors: ["#ff0000", "#ffa500", "#ffff00", "#00ff00", "#0000ff"],
+        });
+      }, 250);
     } catch (error) {
       console.error("Error generating token:", error);
 
@@ -219,6 +248,30 @@ async function deploy() {
   // Stable subtle background (no randomization, non-interactive)
   const bgId = useRef("bg-deco");
 
+  useEffect(() => {
+    // Add shake animation to CSS on the client side
+    const styles = document.createElement("style");
+    styles.innerHTML = `
+      .shake {
+        animation: shake 0.5s;
+      }
+
+      @keyframes shake {
+        0% { transform: translateX(0); }
+        25% { transform: translateX(-5px); }
+        50% { transform: translateX(5px); }
+        75% { transform: translateX(-5px); }
+        100% { transform: translateX(0); }
+      }
+    `;
+    document.head.appendChild(styles);
+
+    return () => {
+      // Clean up the injected styles
+      document.head.removeChild(styles);
+    };
+  }, []);
+
   return (
     <main className="relative min-h-screen text-foreground">
       {/* Animated Background */}
@@ -378,9 +431,9 @@ async function deploy() {
       {showSuccess && (
         <SuccessPopup
           title="Token Deployed!"
-          message={`Your token has been successfully deployed at address: ${deployed || "Unknown"}`}
+          message={`Your token has been successfully deployed at address: ${deployed?.address || "Unknown"}`}
           actionLabel="Continue"
-          onAction={() => router.push(`/token/${deployed}`)}
+          onAction={() => router.push(`/token/${deployed.address}`)}
           onClose={() => setShowSuccess(false)}
         />
       )}
