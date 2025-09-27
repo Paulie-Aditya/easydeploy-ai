@@ -98,6 +98,45 @@ Return only JSON.
   }
 });
 
+// POST /upload-logo
+// body: { name, description, imageBase64 }  OR imageSvg string
+app.post('/upload-logo', async (req, res) => {
+  try {
+    const { name, description, imageBase64, imageSvg } = req.body;
+    if (!imageBase64 && !imageSvg) return res.status(400).json({ error: 'imageBase64 or imageSvg required' });
+
+    let file;
+    if (imageBase64) {
+      // expect data URL "data:image/png;base64,...."
+      const base64 = imageBase64.split(',')[1] || imageBase64;
+      const buffer = Buffer.from(base64, 'base64');
+      file = new File([buffer], `${name || 'logo'}.png`, { type: 'image/png' });
+    } else {
+      // svg
+      const svgBuffer = Buffer.from(imageSvg, 'utf8');
+      file = new File([svgBuffer], `${name || 'logo'}.svg`, { type: 'image/svg+xml' });
+    }
+
+    const cid = await nftClient.storeDirectory([file]); // returns CID for directory; using simple path
+    // create metadata JSON and upload too
+    const metadata = {
+      name: name || 'EasyDeploy Token Logo',
+      description: description || '',
+      image: `ipfs://${cid}/` // note: exact path may differ; nft.storage stores files with paths
+    };
+
+    // store metadata as file (nft.storage has a simple put; we can use storeBlob() too)
+    const metadataFile = new File([JSON.stringify(metadata)], 'metadata.json', { type: 'application/json' });
+    const metaCid = await nftClient.storeDirectory([metadataFile]);
+
+    return res.json({ ok: true, cid, metaCid, metadataUri: `ipfs://${metaCid}/metadata.json` });
+  } catch (err) {
+    console.error('upload-logo err', err);
+    res.status(500).json({ error: String(err) });
+  }
+});
+
+
 
 app.listen(PORT, () => {
   console.log(`EasyDeploy backend listening on ${PORT}`);
