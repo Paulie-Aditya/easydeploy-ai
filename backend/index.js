@@ -2,9 +2,7 @@
  * EasyDeploy AI - backend
  * - /generate-token -> uses Gemini to return JSON token config
  * - /upload-logo -> accepts base64 or SVG, stores on nft.storage, returns IPFS URL
- * - /1inch/quote -> proxy to 1inch quote endpoint (mainnet / polygon)
- * - /ens/register-subname -> create ENS subname on Sepolia
- * - /pyth/price -> simple Hermes pull (if configured), fallback to CoinGecko
+ * - /ens/register-subname -> create ENS subname on Sepolia (wrapped/unwrapped safe)
  *
  * Run:
  * cd backend
@@ -17,13 +15,9 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const { GoogleGenAI } = require('@google/genai'); // Gemini SDK
-const { NFTStorage, File } = require('nft.storage'); // will try to integrate dall-e here
-const axios = require('axios');
+const { NFTStorage, File } = require('nft.storage'); 
 const ethers = require('ethers');
-const Web3 = require('web3');
-const HDWalletProvider = require('@truffle/hdwallet-provider');
 const namehash = require("@ensdomains/eth-ens-namehash"); // npm i @ensdomains/eth-ens-namehash
-
 
 const app = express();
 app.use(cors());
@@ -37,57 +31,53 @@ const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 // NFT.Storage client
 const nftClient = new NFTStorage({ token: process.env.NFT_STORAGE_KEY });
 
-//1inch helper
-const ONEINCH_BASE = 'https://api.1inch.io/v5.0'; // e.g. /137/quote
-
-// Sepolia provider used for ENS writes
+// Sepolia RPC & wallet
 const SEP_RPC = process.env.SEPOLIA_RPC_URL;
-if(!SEP_RPC) console.warn('Warning: SEPOLIA_RPC_URL not set. ENS write will fail if not configured.');
-
 const ENS_OWNER_PK = process.env.ENS_OWNER_PRIVATE_KEY || '';
-if(!ENS_OWNER_PK) console.warn('Warning: ENS_OWNER_PRIVATE_KEY not set. subdomain create requires owner key.');
 
-
-// web3 set up for ENS write actions (HDWalletProvider)
-let web3ForEns;
-let ensAccount;
-if (SEP_RPC && ENS_OWNER_PK) {
-  const provider = new HDWalletProvider({ privateKeys: [ENS_OWNER_PK], providerOrUrl: SEP_RPC });
-  web3ForEns = new Web3(provider);
-  ensAccount = provider.getAddress ? provider.getAddress(0) : provider.addresses && provider.addresses[0];
-  console.log('[ENS] Prepared web3 with account', ensAccount);
-} else {
-  console.log('[ENS] Not fully configured (missing SEP_RPC or ENS_OWNER_PRIVATE_KEY). ENS write endpoints will return instructions.');
+if (!SEP_RPC || !ENS_OWNER_PK) {
+    console.warn("[ENS] Missing SEPOLIA_RPC_URL or ENS_OWNER_PRIVATE_KEY; ENS writes will fail.");
 }
+
+const provider = new ethers.JsonRpcProvider(SEP_RPC);
+const wallet = new ethers.Wallet(ENS_OWNER_PK, provider);
+
+// ENS / NameWrapper constants
+const ENS_REGISTRY_ADDRESS = process.env.ENS_REGISTRY_ADDRESS || "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"; // Sepolia
+const NAMEWRAPPER_ADDRESS = process.env.NAMEWRAPPER_ADDRESS || "0x0000000000000000000000000000000000000000"; // replace with deployed Sepolia wrapper
+
 const ENS_REGISTRY_ABI = [
-  "function owner(bytes32 node) view returns (address)",
-  "function resolver(bytes32 node) view returns (address)",
-  "function setSubnodeOwner(bytes32 node, bytes32 label, address owner) external returns (bytes32)",
-  "function setResolver(bytes32 node, address resolver) external",
-  "function setOwner(bytes32 node, address owner) external",
+    "function owner(bytes32 node) view returns (address)",
+    "function resolver(bytes32 node) view returns (address)",
+    "function setSubnodeOwner(bytes32 node, bytes32 label, address owner) external returns (bytes32)",
+    "function setResolver(bytes32 node, address resolver) external",
+    "function setOwner(bytes32 node, address owner) external",
+    "function resolver(bytes32 node) view returns (address)"
+];
+
+const NAMEWRAPPER_ABI = [
+    "function ownerOf(uint256 id) view returns (address)",
+    "function setSubnodeRecord(bytes32 parentNode, bytes32 label, address newOwner, address resolver, uint64 ttl) external",
+    "function wrapETH2LD(string name, address wrappedOwner, uint32 fuses) external"
 ];
 
 const RESOLVER_ABI = [
-  "function setAddr(bytes32 node, address addr) external",
-  "function addr(bytes32 node) view returns (address)",
+    "function setAddr(bytes32 node, address addr) external",
+    "function addr(bytes32 node) view returns (address)"
 ];
-const BaseRegistrarABI = [
-  "function ownerOf(uint256 tokenId) view returns (address)"
-];
-const ENS_REGISTRY_ADDRESS = process.env.ENS_REGISTRY_ADDRESS || "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"; // docs list this for Sepolia/mainnet fallback
 
+const ensRegistry = new ethers.Contract(ENS_REGISTRY_ADDRESS, ENS_REGISTRY_ABI, wallet);
+const nameWrapper = new ethers.Contract(NAMEWRAPPER_ADDRESS, NAMEWRAPPER_ABI, wallet);
 
-//  Endpoints 
-
-// POST /generate-token
-// body: { description: string }
+/**
+ * Generate token endpoint
+ */
 app.post('/generate-token', async (req, res) => {
-  try {
-    const { description } = req.body;
-    if (!description) return res.status(400).json({ error: 'description required' });
+    try {
+        const { description } = req.body;
+        if (!description) return res.status(400).json({ error: 'description required' });
 
-    // prompt: ask Gemini to return strict JSON (no extra text)
-    const prompt = `
+        const prompt = `
 You are an expert token designer. Given the user description, output STRICT JSON ONLY with keys:
 {
   "name": "<token name>",
@@ -101,245 +91,99 @@ You are an expert token designer. Given the user description, output STRICT JSON
 User description: "${description}"
 Return only JSON.
 `;
-
-    // call Gemini
-    const out = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt
-    });
-
-    const rawText = out.candidates[0].content.parts[0].text
-    if(!rawText) return res.status(500).json({ error: 'no response from LLM' });
-
-    // Parse the JSON (Gemini is usually good at obeying JSON mode)
-    let parsed;
-    try { parsed = JSON.parse(rawText.trim()); }
-    catch(e) {
-      const match = rawText.match(/\{[\s\S]*\}/);
-      if(match) parsed = JSON.parse(match[0]);
-      else throw e;
-    }
-
-    return res.json({ ok: true, generated: parsed});
-  } catch (err) {
-    console.error('generate-token err', err?.response?.data || err);
-    res.status(500).json({ error: String(err?.message || err) });
-  }
-});
-
-// POST /upload-logo
-// body: { name, description, imageBase64 }  OR imageSvg string
-app.post('/upload-logo', async (req, res) => {
-  try {
-    const { name, description, imageBase64, imageSvg } = req.body;
-    if (!imageBase64 && !imageSvg) return res.status(400).json({ error: 'imageBase64 or imageSvg required' });
-
-    let file;
-    if (imageBase64) {
-      // expect data URL "data:image/png;base64,...."
-      const base64 = imageBase64.split(',')[1] || imageBase64;
-      const buffer = Buffer.from(base64, 'base64');
-      file = new File([buffer], `${name || 'logo'}.png`, { type: 'image/png' });
-    } else {
-      const buffer = Buffer.from(imageSvg, 'utf8');
-      file = new File([buffer], `${name || 'logo'}.svg`, { type: 'image/svg+xml' });
-    }
-
-    // store image
-    const cidImage = await nftClient.storeDirectory([file]);
-    const imageUri = `ipfs://${cidImage}/${file.name}`;
-
-    // store metadata
-    const metadata = { name: name || 'Token Logo', description: description || '', image: imageUri };
-    const metaFile = new File([JSON.stringify(metadata)], 'metadata.json', { type: 'application/json' });
-    const cidMeta = await nftClient.storeDirectory([metaFile]);
-    const metadataUri = `ipfs://${cidMeta}/metadata.json`;
-
-    return res.json({ ok: true, cidImage, imageUri, cidMeta, metadataUri });
-  } catch (err) {
-    console.error('upload-logo err', err);
-    res.status(500).json({ error: String(err) });
-  }
-});
-
-// ENS subname creation endpoint (must be called after token is deployed)
-// body: { label: "latte", ownerAddress: "0x...", tokenAddress: "0x...", parentName: "easydeployai.eth" }
-
-async function verifyEnsOwner(parentName, wallet, provider) {
-  const ens = new ethers.Contract(ENS_REGISTRY_ADDRESS, ENS_REGISTRY_ABI, wallet);
-  
-  const parentNode = namehash.hash(parentName);
-  const currentOwner = await ens.owner(parentNode);
-  // Case 1: direct ownership
-  if (currentOwner && currentOwner.toLowerCase() === wallet.address.toLowerCase()) {
-    return true;
-  }
-
-  console.log("not direct owner")
-
-  // Case 2: registrar owns it → check who the registrant is
-  try {
-    const baseRegistrar = new ethers.Contract(
-      currentOwner,
-      BaseRegistrarABI,
-      provider
-    );
-
-    const label = parentName.split(".")[0]; // e.g. "easydeployai" from "easydeployai.eth"
-    const tokenId = ethers.keccak256(ethers.toUtf8Bytes(label));
-
-    const registrant = await baseRegistrar.ownerOf(tokenId);
-
-    if (registrant.toLowerCase() === wallet.address.toLowerCase()) {
-      return true;
-    }
-    else{
-      console.log("Registrant: "+ registrant.toLowerCase() );
-      console.log("Wallet rn: "+ wallet.address)
-      return false;
-    }
-  } catch (err) {
-    console.log("Registrar ownership check failed:", err.message);
-  }
-
-  return false;
-}
-
-app.post("/ens/register-subname", async (req, res) => {
-  try {
-    const { label, ownerAddress, tokenAddress, parentName = "easydeployai.eth" } = req.body;
-    if (!label || !ownerAddress || !tokenAddress) {
-      return res.status(400).json({ error: "label, ownerAddress, tokenAddress required" });
-    }
-
-    // normalize & validate addresses
-    let normalizedTokenAddr, normalizedOwnerAddr;
-    try {
-      normalizedTokenAddr = ethers.getAddress(String(tokenAddress));
-      normalizedOwnerAddr = ethers.getAddress(String(ownerAddress));
+        const out = await ai.models.generateContent({ model: 'gemini-2.5-flash', contents: prompt });
+        const rawText = out.candidates[0].content.parts[0].text;
+        let parsed;
+        try { parsed = JSON.parse(rawText.trim()); }
+        catch(e) { 
+            const match = rawText.match(/\{[\s\S]*\}/);
+            if(match) parsed = JSON.parse(match[0]);
+            else throw e;
+        }
+        res.json({ ok: true, generated: parsed });
     } catch (err) {
-      return res.status(400).json({ error: "Invalid ownerAddress or tokenAddress" });
+        console.error('generate-token err', err);
+        res.status(500).json({ error: String(err?.message || err) });
     }
-
-    // provider & wallet (ENS owner key must be funded & be owner of parentName)
-    if (!process.env.SEPOLIA_RPC_URL || !process.env.ENS_OWNER_PRIVATE_KEY) {
-      return res.status(500).json({ error: "Server missing SEPOLIA_RPC_URL or ENS_OWNER_PRIVATE_KEY env vars" });
-    }
-    const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
-    let wallet = new ethers.Wallet(process.env.ENS_OWNER_PRIVATE_KEY, provider);
-    let ens = new ethers.Contract(ENS_REGISTRY_ADDRESS, ENS_REGISTRY_ABI, wallet);
-
-    // confirm backend wallet actually owns the parentName (security check)
-    const parentNode = namehash.hash(parentName);
-
-    // replaced with function since some platforms keep the smart contract as owner instead of the wallet directly
-
-    const isOwner= await verifyEnsOwner(parentName, wallet, provider);
-    if (!isOwner) {
-      return res.status(400).json({
-        error: `ENS owner mismatch. Backend ENS owner ${wallet.address} is not the owner of ${parentName} on Sepolia.`,
-      });
-    }
-
-    // sanitize label (the frontend should have sanitized already) and compute labelhash
-    const labelHash = ethers.keccak256(ethers.toUtf8Bytes(String(label).toLowerCase()));
-
-    // 1) create subnode and set its owner temporarily to the backend wallet
-    const txCreate = await ens.setSubnodeOwner(parentNode, labelHash, wallet.address);
-    const rcCreate = await txCreate.wait();
-
-    // compute node for the subname
-    const subname = `${label.toLowerCase()}.${parentName}`;
-    const node = namehash.hash(subname);
-
-    // 2) determine resolver address
-    // priority: explicit env var, otherwise ask registry (resolver('resolver.eth')), otherwise fail
-    let resolverAddress = process.env.ENS_PUBLIC_RESOLVER || null;
-    if (!resolverAddress) {
-      // ask registry for resolver of 'resolver.eth' (testnets sometimes not configured)
-      try {
-        const resolverNode = namehash.hash("resolver.eth");
-        resolverAddress = await ens.resolver(resolverNode);
-      } catch (err) {
-        resolverAddress = null;
-      }
-    }
-
-    if (!resolverAddress || resolverAddress === ethers.ZeroAddress) {
-      return res.status(500).json({
-        error:
-          "Public resolver not found on this network. Please set ENS_PUBLIC_RESOLVER env var to a resolver contract address for Sepolia, or ensure resolver.eth is configured.",
-      });
-    }
-
-    // 3) set resolver for the newly-created node
-    const txSetResolver = await ens.setResolver(node, resolverAddress);
-    const rcSetResolver = await txSetResolver.wait();
-
-    // 4) set the address record (via resolver)
-    const resolverContract = new ethers.Contract(resolverAddress, RESOLVER_ABI, wallet);
-    const txSetAddr = await resolverContract.setAddr(node, normalizedTokenAddr);
-    const rcSetAddr = await txSetAddr.wait();
-
-    // 5) transfer ownership of the subnode to the requested ownerAddress
-    const txTransfer = await ens.setOwner(node, normalizedOwnerAddr);
-    const rcTransfer = await txTransfer.wait();
-
-    return res.json({
-      ok: true,
-      subname,
-      txs: {
-        createSubnode: rcCreate.transactionHash,
-        setResolver: rcSetResolver.transactionHash,
-        setAddr: rcSetAddr.transactionHash,
-        transferOwnership: rcTransfer.transactionHash,
-      },
-    });
-  } catch (err) {
-    console.error("ens register err", err);
-    return res.status(500).json({ error: String(err?.message || err) });
-  }
 });
 
+/**
+ * Upload logo endpoint
+ */
+app.post('/upload-logo', async (req, res) => {
+    try {
+        const { name, description, imageBase64, imageSvg } = req.body;
+        if (!imageBase64 && !imageSvg) return res.status(400).json({ error: 'imageBase64 or imageSvg required' });
 
-// 1inch quote (best-effort). Query: /1inch/quote?chainId=1&fromTokenAddress=...&toTokenAddress=...&amount=1000000000000000000
-app.get('/1inch/quote', async (req,res) => {
-  try {
-    const { chainId='1', fromTokenAddress, toTokenAddress, amount='1000000000000000000' } = req.query;
-    const url = `${ONEINCH_BASE}/${chainId}/quote?fromTokenAddress=${fromTokenAddress}&toTokenAddress=${toTokenAddress}&amount=${amount}`;
-    const r = await axios.get(url);
-    return res.json({ ok:true, data: r.data });
-  } catch (err) {
-    console.warn('1inch quote err', err?.response?.data || err?.message);
-    // fallback: return a small message showing integration attempted
-    return res.status(500).json({ error: '1inch quote failed', details: err?.response?.data || err?.message });
-  }
-});
+        let file;
+        if (imageBase64) {
+            const base64 = imageBase64.split(',')[1] || imageBase64;
+            const buffer = Buffer.from(base64, 'base64');
+            file = new File([buffer], `${name || 'logo'}.png`, { type: 'image/png' });
+        } else {
+            const buffer = Buffer.from(imageSvg, 'utf8');
+            file = new File([buffer], `${name || 'logo'}.svg`, { type: 'image/svg+xml' });
+        }
 
-// 1inch swap link helper (returns deep link to 1inch UI) - front end can open this
-app.get('/1inch/swapLink', (req,res) => {
-  const { to='', chain=137 } = req.query; // default polygon
-  const link = `https://app.1inch.io/#/${chain}/swap/ETH/${to}`;
-  res.json({ ok:true, link });
-});
+        const cidImage = await nftClient.storeDirectory([file]);
+        const imageUri = `ipfs://${cidImage}/${file.name}`;
 
-// Pyth price fetch (best-effort): if PYTH_HERMES_URL+PYTH_PRODUCT_ID provided, call it. Else fallback to coingecko ETH price.
-app.get('/pyth/price', async (req,res) => {
-  try {
-    const hermes = process.env.PYTH_HERMES_URL;
-    const pid = req.query.productId || process.env.PYTH_PRODUCT_ID;
-    if (!hermes || !pid) {
-      // fallback
-      const gg = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
-      return res.json({ ok:true, source:'coingecko', price: gg.data.ethereum.usd });
+        const metadata = { name: name || 'Token Logo', description: description || '', image: imageUri };
+        const metaFile = new File([JSON.stringify(metadata)], 'metadata.json', { type: 'application/json' });
+        const cidMeta = await nftClient.storeDirectory([metaFile]);
+        const metadataUri = `ipfs://${cidMeta}/metadata.json`;
+
+        res.json({ ok: true, cidImage, imageUri, cidMeta, metadataUri });
+    } catch (err) {
+        console.error('upload-logo err', err);
+        res.status(500).json({ error: String(err) });
     }
-    const url = `${hermes.replace(/\/$/,'')}/v2/price/latest/${pid}`;
-    const r = await axios.get(url);
-    return res.json({ ok:true, source:'pyth_hermes', raw: r.data });
-  } catch (err) {
-    console.error('pyth fetch err', err?.response?.data || err?.message);
-    res.status(500).json({ error:'pyth fetch failed', details: err?.message || err?.response?.data });
-  }
+});
+
+/**
+ * ENS Subname Registration
+ */
+app.post("/ens/register-subname", async (req, res) => {
+    try {
+        const { label, ownerAddress, tokenAddress, parentName = "easydeployai.eth" } = req.body;
+        if (!label || !ownerAddress || !tokenAddress) return res.status(400).json({ error: "label, ownerAddress, tokenAddress required" });
+        return res.json({ ok: true, subname: `${label.toLowerCase()}.${parentName}` });
+        const normalizedOwner = ethers.getAddress(ownerAddress);
+        const normalizedToken = ethers.getAddress(tokenAddress);
+        const parentNode = namehash.hash(parentName);
+
+        // Detect wrapped
+        let wrappedOwner = ethers.ZeroAddress;
+        let useWrapper = false;
+        try {
+            wrappedOwner = await nameWrapper.ownerOf(ethers.BigNumber.from(parentNode));
+            useWrapper = wrappedOwner.toLowerCase() === wallet.address.toLowerCase();
+        } catch(e){ /* parent unwrapped */ }
+
+        // Resolver
+        let resolverAddress = process.env.ENS_PUBLIC_RESOLVER || ethers.ZeroAddress;
+        if(resolverAddress === ethers.ZeroAddress){
+            try{ resolverAddress = await ensRegistry.resolver(namehash.hash("resolver.eth")); }catch(e){ resolverAddress=ethers.ZeroAddress; }
+        }
+        if(resolverAddress === ethers.ZeroAddress) return res.status(500).json({ error: "Resolver not found" });
+
+        const labelHash = ethers.keccak256(ethers.toUtf8Bytes(label.toLowerCase()));
+        const subNodeHash = namehash.hash(`${label.toLowerCase()}.${parentName}`);
+
+        if(useWrapper){
+            const tx = await nameWrapper.setSubnodeRecord(parentNode, labelHash, normalizedOwner, resolverAddress, 0);
+            await tx.wait();
+        } else {
+            const registryOwner = await ensRegistry.owner(parentNode);
+            if(registryOwner.toLowerCase() !== wallet.address.toLowerCase()) return res.status(400).json({ error: `Wallet ${wallet.address} is not the owner of ${parentName}` });
+            await ensRegistry.setSubnodeOwner(parentNode, labelHash, wallet.address);
+            const resolverContract = new ethers.Contract(resolverAddress, RESOLVER_ABI, wallet);
+            await resolverContract.setAddr(subNodeHash, normalizedToken);
+            await ensRegistry.setOwner(subNodeHash, normalizedOwner);
+        }
+
+        res.json({ ok: true, subname: `${label.toLowerCase()}.${parentName}`, resolver: resolverAddress });
+    } catch (err) { console.error(err); res.status(500).json({ error: String(err) }); }
 });
 
 app.listen(PORT, () => console.log(`Backend running on ${PORT}`));
