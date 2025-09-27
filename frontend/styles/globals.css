@@ -26,9 +26,14 @@
     --radius: 0.5rem;
 
     /* Brand Colors */
-    --brand: 199 89% 48%;
+    --brand: 262 83% 58%; /* Vibrant purple */
     --brand-foreground: 0 0% 100%;
-    --accent: 280 100% 60%;
+    --accent: 330 81% 60%; /* Electric pink */
+    --gradient-start: 262 83% 58%;
+    --gradient-end: 196 83% 61%; /* Bright cyan */
+    --success: 142 71% 45%; /* Vibrant green */
+    --info: 199 89% 48%; /* Bright blue */
+    --highlight: 35 92% 58%; /* Warm amber */
   }
 
   .dark {
