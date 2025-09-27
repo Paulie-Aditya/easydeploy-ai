@@ -20,7 +20,8 @@ export default function Home() {
   const [gen, setGen] = useState(null);
   const [metaUri, setMetaUri] = useState("");
   const [deployed, setDeployed] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [loadingGenerate, setLoadingGenerate] = useState(false);
+  const [loadingDeploy, setLoadingDeploy] = useState(false);
   const [ensSubname, setEnsSubname] = useState("");
   const [activeStep, setActiveStep] = useState(0);
   const [progress, setProgress] = useState(0);
@@ -33,14 +34,14 @@ export default function Home() {
   const FACTORY_ADDRESS = process.env.NEXT_PUBLIC_FACTORY_ADDRESS;
 
   async function generateToken() {
-    setLoading(true);
+    setLoadingGenerate(true);
     try {
       const r = await axios.post(`${BACKEND}/generate-token`, { description });
       setGen(r.data.generated);
     } catch (e) {
       alert("Generate failed: " + (e?.response?.data?.error || e.message));
     } finally {
-      setLoading(false);
+      setLoadingGenerate(false);
     }
   }
 
@@ -83,7 +84,7 @@ async function deploy() {
   if (!FACTORY_ADDRESS) return alert("Missing NEXT_PUBLIC_FACTORY_ADDRESS");
 
   try {
-    setLoading(true);
+    setLoadingDeploy(true);
     const decimals = gen.decimals ?? 18;
     const supply =
       BigInt(gen.supply ?? 1_000_000) * BigInt(10) ** BigInt(decimals);
@@ -168,7 +169,7 @@ async function deploy() {
     console.error(e);
     alert("Deploy failed: " + (e?.response?.data?.error || e?.message));
   } finally {
-    setLoading(false);
+    setLoadingDeploy(false);
   }
 }
 
@@ -204,13 +205,11 @@ async function deploy() {
       <section className="mx-auto max-w-6xl px-4 pt-10 pb-8 md:pt-16 md:pb-12">
         <div className="grid gap-6 md:grid-cols-2 md:items-center">
           <div className="space-y-4">
-            <p className="text-sm font-medium text-muted-foreground">
+            <p className="text-xl text-pretty font-medium text-muted-foreground">
               AI‑Powered
             </p>
             <h2 className="text-pretty text-4xl font-extrabold leading-tight md:text-5xl">
-              <span className="bg-gradient-to-r from-[var(--brand)] to-[var(--accent)] bg-clip-text text-transparent">
-                Token Creation
-              </span>{" "}
+              Token Creation
               without code
             </h2>
             <p className="text-pretty text-muted-foreground leading-relaxed">
@@ -247,33 +246,33 @@ async function deploy() {
               <span>AI will propose name, symbol, supply and features</span>
               <span>{description.length}/500</span>
             </div>
-            <div className="mt-4 grid gap-3 sm:grid-cols-3">
+            <div className="mt-4 flex gap-3 sm:grid-cols-3">
               <Button
                 className="w-full bg-gradient-to-r from-[var(--brand)] to-[var(--accent)] text-primary-foreground hover:opacity-95"
                 onClick={generateToken}
-                disabled={loading || !description.trim()}
+                disabled={loadingGenerate || loadingDeploy || !description.trim()}
               >
-                {loading ? "AI thinking…" : "Generate"}
+                {loadingGenerate ? "AI thinking…" : "Generate"}
               </Button>
-              <Button
+              {/* <Button
                 variant="secondary"
                 className="w-full"
                 onClick={uploadLogo}
                 disabled={!gen || loading}
               >
                 Upload Logo
-              </Button>
+              </Button> */}
               <Button
                 className="w-full bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50"
                 onClick={deploy}
-                disabled={!gen || !walletClient || loading || !FACTORY_ADDRESS}
+                disabled={!gen || !walletClient || loadingGenerate || loadingDeploy || !FACTORY_ADDRESS}
                 title={
                   !FACTORY_ADDRESS
                     ? "Missing NEXT_PUBLIC_FACTORY_ADDRESS"
                     : undefined
                 }
               >
-                {loading ? "Deploying…" : "Deploy"}
+                {loadingDeploy ? "Deploying…" : "Deploy"}
               </Button>
             </div>
           </div>
