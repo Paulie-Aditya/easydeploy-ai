@@ -97,6 +97,13 @@ export default function Home() {
         message: "Failed to generate token. Please try again.",
         type: "error",
       });
+
+      // Add a 'Try Again' toast
+      setToast({
+        title: "Try Again",
+        message: "Something went wrong. Click Generate to retry.",
+        type: "warning",
+      });
     } finally {
       setLoadingGenerate(false);
     }
