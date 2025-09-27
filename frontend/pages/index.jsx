@@ -75,66 +75,101 @@ export default function Home() {
       .slice(0, 50);
   }
 
-  async function deploy() {
-    if (!walletClient) return alert("Connect wallet");
-    if (!gen) return alert("Generate token first");
-    if (!FACTORY_ADDRESS) return alert("Missing NEXT_PUBLIC_FACTORY_ADDRESS");
+async function deploy() {
+  if (!walletClient) return alert("Connect wallet");
+  if (!gen) return alert("Generate token first");
+  if (!FACTORY_ADDRESS) return alert("Missing NEXT_PUBLIC_FACTORY_ADDRESS");
 
-    try {
-      setLoading(true);
-      const decimals = gen.decimals ?? 18;
-      const supply =
-        BigInt(gen.supply ?? 1_000_000) * BigInt(10) ** BigInt(decimals);
+  try {
+    setLoading(true);
+    const decimals = gen.decimals ?? 18;
+    const supply =
+      BigInt(gen.supply ?? 1_000_000) * BigInt(10) ** BigInt(decimals);
 
-      // Convert walletClient to ethers signer
-      const provider = new ethers.BrowserProvider(walletClient);
-      const signer = await provider.getSigner();
-      const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
-      const tx = await factory.deployERC20(
-        gen.name,
-        gen.symbol,
-        supply.toString()
-      );
-      const receipt = await tx.wait();
+    // Convert walletClient to ethers signer (ethers v6)
+    const provider = new ethers.BrowserProvider(walletClient);
+    const signer = await provider.getSigner();
+    const factory = new ethers.Contract(FACTORY_ADDRESS, FACTORY_ABI, signer);
 
-      let tokenAddr = null;
-      for (const e of (receipt).events || []) {
-        if (e.event === "TokenDeployed") {
-          tokenAddr = e.args?.tokenAddress;
-          break;
-        }
-      }
-      if (!tokenAddr) tokenAddr = "0x" + receipt.transactionHash;
-      setDeployed({ address: tokenAddr, txHash: receipt.transactionHash });
+    // 1) deploy
+    const tx = await factory.deployERC20(gen.name, gen.symbol, supply.toString());
+    const receipt = await tx.wait(); // wait for factory tx to be mined
 
-      // ENS subname
-      const label = sanitizeLabel(gen.name);
+    // 2) parse logs robustly to get token address
+    let tokenAddr = null;
+    const iface = factory.interface;
+    for (const log of receipt.logs || []) {
       try {
-        const ensRes = await axios.post(`${BACKEND}/ens/register-subname`, {
-          label,
-          ownerAddress: address,
-          tokenAddress: tokenAddr,
-          parentName: "easydeployai.eth",
-        });
-        setEnsSubname(ensRes.data.subname);
-        alert("Deployed and ENS subname created: " + ensRes.data.subname);
-      } catch (ensErr) {
-        console.warn(
-          "ENS creation failed:",
-          ensErr?.response?.data?.error || ensErr.message
-        );
-        alert(
-          "Token deployed but ENS creation failed: " +
-            (ensErr?.response?.data?.error || ensErr.message)
-        );
+        const parsed = iface.parseLog(log);
+        const name = parsed.name || parsed.event || parsed.topic;
+        if (
+          name === "TokenDeployed" ||
+          name === "TokenCreated" ||
+          name === "ERC20Deployed"
+        ) {
+          // try several common arg names
+          tokenAddr =
+            parsed.args?.tokenAddress ||
+            parsed.args?.token ||
+            parsed.args?._token ||
+            parsed.args?.newToken;
+          if (tokenAddr) break;
+        }
+      } catch (err) {
+        // not an event from this iface => ignore
       }
-    } catch (e) {
-      console.error(e);
-      alert("Deploy failed: " + (e?.response?.data?.error || e?.message));
-    } finally {
-      setLoading(false);
     }
+
+    // IMPORTANT: if tokenAddr couldn't be found in logs, abort ENS step
+    if (!tokenAddr) {
+      console.warn("Factory did not emit token address in logs. Aborting ENS registration.");
+      setDeployed({ address: null, txHash: receipt.transactionHash });
+      alert(
+        "Token deployed (tx: " +
+          receipt.transactionHash +
+          ") but factory did not emit the token address. ENS creation skipped."
+      );
+      return;
+    }
+
+    // normalize address (ethers v6)
+    try {
+      tokenAddr = ethers.getAddress(tokenAddr.toString());
+    } catch (err) {
+      console.warn("Invalid token address parsed:", tokenAddr);
+      setDeployed({ address: null, txHash: receipt.transactionHash });
+      alert("Token deployed but parsed token address is invalid. ENS creation skipped.");
+      return;
+    }
+
+    setDeployed({ address: tokenAddr, txHash: receipt.transactionHash });
+
+    // 3) ENS subname registration only now (valid tokenAddr)
+    const label = sanitizeLabel(gen.name);
+    try {
+      const ensRes = await axios.post(`${BACKEND}/ens/register-subname`, {
+        label,
+        ownerAddress: address,     // user's wallet address
+        tokenAddress: tokenAddr,   // properly found and normalized
+        parentName: "easydeployai.eth",
+      });
+      setEnsSubname(ensRes.data.subname);
+      alert("Deployed and ENS subname created: " + ensRes.data.subname);
+    } catch (ensErr) {
+      console.warn("ENS creation failed:", ensErr?.response?.data?.error || ensErr.message);
+      alert(
+        "Token deployed but ENS creation failed: " +
+          (ensErr?.response?.data?.error || ensErr.message)
+      );
+    }
+  } catch (e) {
+    console.error(e);
+    alert("Deploy failed: " + (e?.response?.data?.error || e?.message));
+  } finally {
+    setLoading(false);
   }
+}
+
 
   // Stable subtle background (no randomization, non-interactive)
   const bgId = useRef("bg-deco");

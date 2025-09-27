@@ -22,6 +22,8 @@ const axios = require('axios');
 const { ethers } = require('ethers');
 const Web3 = require('web3');
 const HDWalletProvider = require('@truffle/hdwallet-provider');
+const namehash = require("@ensdomains/eth-ens-namehash"); // npm i @ensdomains/eth-ens-namehash
+
 
 const app = express();
 app.use(cors());
@@ -57,6 +59,21 @@ if (SEP_RPC && ENS_OWNER_PK) {
 } else {
   console.log('[ENS] Not fully configured (missing SEP_RPC or ENS_OWNER_PRIVATE_KEY). ENS write endpoints will return instructions.');
 }
+const ENS_REGISTRY_ABI = [
+  "function owner(bytes32 node) view returns (address)",
+  "function resolver(bytes32 node) view returns (address)",
+  "function setSubnodeOwner(bytes32 node, bytes32 label, address owner) external returns (bytes32)",
+  "function setResolver(bytes32 node, address resolver) external",
+  "function setOwner(bytes32 node, address owner) external",
+];
+
+const RESOLVER_ABI = [
+  "function setAddr(bytes32 node, address addr) external",
+  "function addr(bytes32 node) view returns (address)",
+];
+const ENS_REGISTRY_ADDRESS = process.env.ENS_REGISTRY_ADDRESS || "0x00000000000C2E074eC69A0dFb2997BA6C7d2e1e"; // docs list this for Sepolia/mainnet fallback
+
+
 //  Endpoints 
 
 // POST /generate-token
@@ -144,33 +161,100 @@ app.post('/upload-logo', async (req, res) => {
 
 // ENS subname creation endpoint (must be called after token is deployed)
 // body: { label: "latte", ownerAddress: "0x...", tokenAddress: "0x...", parentName: "easydeployai.eth" }
-app.post('/ens/register-subname', async (req, res) => {
+
+app.post("/ens/register-subname", async (req, res) => {
   try {
-    if (!web3ForEns) return res.status(400).json({ error: 'ENS not configured on backend. Set SEPOLIA_RPC_URL and ENS_OWNER_PRIVATE_KEY.' });
-
-    const { label, ownerAddress, tokenAddress, parentName = 'easydeployai.eth' } = req.body;
-    if(!label || !ownerAddress || !tokenAddress) return res.status(400).json({ error: 'label, ownerAddress, tokenAddress required' });
-
-    // confirm current owner of parentName on Sepolia
-    const currentOwner = await web3ForEns.eth.ens.owner(parentName); // web3.js wrapper
-    if(!currentOwner || currentOwner.toLowerCase() !== ensAccount.toLowerCase()) {
-      return res.status(400).json({ error: `ENS owner mismatch. The backend's ENS owner ${ensAccount} is not the owner of ${parentName} on Sepolia. Current owner: ${currentOwner}. Ensure you own the parent name on Sepolia or run using your ENS owner key.`});
+    const { label, ownerAddress, tokenAddress, parentName = "easydeployai.eth" } = req.body;
+    if (!label || !ownerAddress || !tokenAddress) {
+      return res.status(400).json({ error: "label, ownerAddress, tokenAddress required" });
     }
 
-    // create subnode and set owner to ownerAddress
-    // web3.js ENS helper: setSubnodeOwner(name, label, address)
-    console.log('[ENS] creating subnode', label, 'under', parentName);
-    const tx = await web3ForEns.eth.ens.setSubnodeOwner(parentName, label, ownerAddress, { from: ensAccount });
-    // set address record for the new subname
-    const subname = `${label}.${parentName}`;
-    const tx2 = await web3ForEns.eth.ens.setAddress(subname, tokenAddress, { from: ensAccount });
+    // normalize & validate addresses
+    let normalizedTokenAddr, normalizedOwnerAddr;
+    try {
+      normalizedTokenAddr = ethers.getAddress(String(tokenAddress));
+      normalizedOwnerAddr = ethers.getAddress(String(ownerAddress));
+    } catch (err) {
+      return res.status(400).json({ error: "Invalid ownerAddress or tokenAddress" });
+    }
 
-    return res.json({ ok: true, subname, tx, tx2 });
+    // provider & wallet (ENS owner key must be funded & be owner of parentName)
+    if (!process.env.SEPOLIA_RPC_URL || !process.env.ENS_OWNER_PRIVATE_KEY) {
+      return res.status(500).json({ error: "Server missing SEPOLIA_RPC_URL or ENS_OWNER_PRIVATE_KEY env vars" });
+    }
+    const provider = new ethers.JsonRpcProvider(process.env.SEPOLIA_RPC_URL);
+    const wallet = new ethers.Wallet(process.env.ENS_OWNER_PRIVATE_KEY, provider);
+    const ens = new ethers.Contract(ENS_REGISTRY_ADDRESS, ENS_REGISTRY_ABI, wallet);
+
+    // confirm backend wallet actually owns the parentName (security check)
+    const parentNode = namehash.hash(parentName);
+    const currentOwner = await ens.owner(parentNode);
+    if (!currentOwner || currentOwner.toLowerCase() !== wallet.address.toLowerCase()) {
+      return res.status(400).json({
+        error: `ENS owner mismatch. Backend ENS owner ${wallet.address} is not the owner of ${parentName} on Sepolia. Current owner: ${currentOwner}.`,
+      });
+    }
+
+    // sanitize label (the frontend should have sanitized already) and compute labelhash
+    const labelHash = ethers.keccak256(ethers.toUtf8Bytes(String(label).toLowerCase()));
+
+    // 1) create subnode and set its owner temporarily to the backend wallet
+    const txCreate = await ens.setSubnodeOwner(parentNode, labelHash, wallet.address);
+    const rcCreate = await txCreate.wait();
+
+    // compute node for the subname
+    const subname = `${label.toLowerCase()}.${parentName}`;
+    const node = namehash.hash(subname);
+
+    // 2) determine resolver address
+    // priority: explicit env var, otherwise ask registry (resolver('resolver.eth')), otherwise fail
+    let resolverAddress = process.env.ENS_PUBLIC_RESOLVER || null;
+    if (!resolverAddress) {
+      // ask registry for resolver of 'resolver.eth' (testnets sometimes not configured)
+      try {
+        const resolverNode = namehash.hash("resolver.eth");
+        resolverAddress = await ens.resolver(resolverNode);
+      } catch (err) {
+        resolverAddress = null;
+      }
+    }
+
+    if (!resolverAddress || resolverAddress === ethers.ZeroAddress) {
+      return res.status(500).json({
+        error:
+          "Public resolver not found on this network. Please set ENS_PUBLIC_RESOLVER env var to a resolver contract address for Sepolia, or ensure resolver.eth is configured.",
+      });
+    }
+
+    // 3) set resolver for the newly-created node
+    const txSetResolver = await ens.setResolver(node, resolverAddress);
+    const rcSetResolver = await txSetResolver.wait();
+
+    // 4) set the address record (via resolver)
+    const resolverContract = new ethers.Contract(resolverAddress, RESOLVER_ABI, wallet);
+    const txSetAddr = await resolverContract.setAddr(node, normalizedTokenAddr);
+    const rcSetAddr = await txSetAddr.wait();
+
+    // 5) transfer ownership of the subnode to the requested ownerAddress
+    const txTransfer = await ens.setOwner(node, normalizedOwnerAddr);
+    const rcTransfer = await txTransfer.wait();
+
+    return res.json({
+      ok: true,
+      subname,
+      txs: {
+        createSubnode: rcCreate.transactionHash,
+        setResolver: rcSetResolver.transactionHash,
+        setAddr: rcSetAddr.transactionHash,
+        transferOwnership: rcTransfer.transactionHash,
+      },
+    });
   } catch (err) {
-    console.error('ens register err', err?.message || err);
-    res.status(500).json({ error: String(err?.message || err) });
+    console.error("ens register err", err);
+    return res.status(500).json({ error: String(err?.message || err) });
   }
 });
+
 
 // 1inch quote (best-effort). Query: /1inch/quote?chainId=1&fromTokenAddress=...&toTokenAddress=...&amount=1000000000000000000
 app.get('/1inch/quote', async (req,res) => {
