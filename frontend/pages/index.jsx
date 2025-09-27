@@ -13,13 +13,13 @@ import { SuccessPopup } from "@/components/ui/success-popup";
 import { motion, useScroll, useInView } from "framer-motion";
 import Confetti from "react-confetti";
 import confetti from "canvas-confetti";
+import { useRouter } from 'next/router';
 
 // Minimal ABI for factory
 const FACTORY_ABI = [
   "function deployERC20(string name, string symbol, uint256 supply) public returns (address)",
   "event TokenDeployed(address indexed owner, address tokenAddress, string name, string symbol)",
 ];
-
 
 export default function Home() {
   const [description, setDescription] = useState("");
@@ -41,6 +41,7 @@ export default function Home() {
 
   const { address } = useAccount();
   const { data: walletClient } = useWalletClient();
+  const router = useRouter(); // Ensure router is defined at the top level
 
   const BACKEND =
     process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5001";
@@ -439,7 +440,6 @@ async function deploy() {
         <SuccessPopup
           title="Token Deployed!"
           message={`Your token has been successfully deployed at address: ${deployed?.address || "Unknown"}`}
-          actionLabel="Continue"
           onAction={() => router.push(`/token/${deployed.address}`)}
           onClose={() => setShowSuccess(false)}
         />

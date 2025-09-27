@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import confetti from 'canvas-confetti';
 
-export function SuccessPopup({ title, message, onClose }) {
+export function SuccessPopup({ title, message, onClose, onAction }) {
   React.useEffect(() => {
     // Fire confetti
     const duration = 5 * 1000;
@@ -76,7 +76,6 @@ export function SuccessPopup({ title, message, onClose }) {
 
     return () => clearInterval(interval);
   }, []);
-
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center">
       <motion.div
@@ -93,7 +92,7 @@ export function SuccessPopup({ title, message, onClose }) {
           <h3 className="text-2xl font-bold mb-2">{title}</h3>
           <p className="text-muted-foreground mb-6">{message}</p>
           <button
-            onClick={onClose}
+            onClick={onAction}
             className="btn-gradient px-6 py-2 rounded-lg text-white font-medium"
           >
             Continue

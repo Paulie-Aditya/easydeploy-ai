@@ -6,6 +6,7 @@ import { useAccount } from 'wagmi';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
+import { ethers } from 'ethers';
 
 export default function TokenPage() {
   const router = useRouter();
@@ -26,22 +27,44 @@ export default function TokenPage() {
     }
   }, [address]);
 
+  async function fetchTokenDataFromSepolia(address) {
+    const provider = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL);
+    const ERC20_ABI = [
+        "function name() view returns (string)",
+        "function symbol() view returns (string)",
+        "function totalSupply() view returns (uint256)",
+        "function decimals() view returns (uint8)"
+    ];
+
+    const contract = new ethers.Contract(address, ERC20_ABI, provider);
+
+    const [name, symbol, totalSupply, decimals] = await Promise.all([
+        contract.name(),
+        contract.symbol(),
+        contract.totalSupply(),
+        contract.decimals()
+    ]);
+
+    return {
+        name,
+        symbol,
+        supply: ethers.formatUnits(totalSupply, decimals),
+        decimals
+    };
+  }
+
   async function fetchTokenData() {
     try {
-      // In a real app, you'd fetch token data from the blockchain
-      // For now, we'll simulate with mock data
+      const data = await fetchTokenDataFromSepolia(address);
       setTokenData({
-        name: 'Coffee Token',
-        symbol: 'COFFEE',
-        address: address,
-        supply: '1000000',
-        decimals: 18,
-        description: 'A meme token for coffee lovers',
-        metadataUri: 'ipfs://QmExample...',
-        ensName: `coffee.easydeployai.eth`
+        ...data,
+        address,
+        description: 'A token fetched from Sepolia',
+        metadataUri: 'N/A',
+        ensName: `${data.symbol.toLowerCase()}.easydeployai.eth`
       });
     } catch (error) {
-      console.error('Error fetching token data:', error);
+      console.error('Error fetching token data from Sepolia:', error);
     } finally {
       setLoading(false);
     }
@@ -50,7 +73,8 @@ export default function TokenPage() {
   async function fetchPrice() {
     try {
       const response = await axios.get(`${BACKEND}/pyth/price`);
-      setPrice(response.data);
+      const tokenPrice = response.data.prices.find(p => p.id === address)?.price || 'N/A';
+      setPrice(tokenPrice);
     } catch (error) {
       console.error('Error fetching price:', error);
       // Fallback price
