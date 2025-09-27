@@ -20,6 +20,8 @@ const { GoogleGenAI } = require('@google/genai'); // Gemini SDK
 const { NFTStorage, File } = require('nft.storage'); // will try to integrate dall-e here
 const axios = require('axios');
 const { ethers } = require('ethers');
+const Web3 = require('web3');
+const HDWalletProvider = require('@truffle/hdwallet-provider');
 
 const app = express();
 app.use(cors());
@@ -38,10 +40,25 @@ const nftClient = new NFTStorage({ token: process.env.NFT_STORAGE_KEY });
 //1inch helper
 const ONEINCH_BASE = 'https://api.1inch.io/v5.0'; // e.g. /137/quote
 
-// ENS provider (Alchemy or default)
-const ALCHEMY = process.env.ALCHEMY_API_KEY;
-const mainnetProvider = ALCHEMY ? new ethers.AlchemyProvider('homestead', ALCHEMY) : ethers.getDefaultProvider('homestead');
+// Sepolia provider used for ENS writes
+const SEP_RPC = process.env.SEPOLIA_RPC_URL;
+if(!SEP_RPC) console.warn('Warning: SEPOLIA_RPC_URL not set. ENS write will fail if not configured.');
 
+const ENS_OWNER_PK = process.env.ENS_OWNER_PRIVATE_KEY || '';
+if(!ENS_OWNER_PK) console.warn('Warning: ENS_OWNER_PRIVATE_KEY not set. subdomain create requires owner key.');
+
+
+// web3 set up for ENS write actions (HDWalletProvider)
+let web3ForEns;
+let ensAccount;
+if (SEP_RPC && ENS_OWNER_PK) {
+  const provider = new HDWalletProvider({ privateKeys: [ENS_OWNER_PK], providerOrUrl: SEP_RPC });
+  web3ForEns = new Web3(provider);
+  ensAccount = provider.getAddress ? provider.getAddress(0) : provider.addresses && provider.addresses[0];
+  console.log('[ENS] Prepared web3 with account', ensAccount);
+} else {
+  console.log('[ENS] Not fully configured (missing SEP_RPC or ENS_OWNER_PRIVATE_KEY). ENS write endpoints will return instructions.');
+}
 //  Endpoints 
 
 // POST /generate-token
@@ -136,7 +153,35 @@ app.post('/upload-logo', async (req, res) => {
   }
 });
 
+// ENS subname creation endpoint (must be called after token is deployed)
+// body: { label: "latte", ownerAddress: "0x...", tokenAddress: "0x...", parentName: "easydeployai.eth" }
+app.post('/ens/register-subname', async (req, res) => {
+  try {
+    if (!web3ForEns) return res.status(400).json({ error: 'ENS not configured on backend. Set SEPOLIA_RPC_URL and ENS_OWNER_PRIVATE_KEY.' });
 
+    const { label, ownerAddress, tokenAddress, parentName = 'easydeployai.eth' } = req.body;
+    if(!label || !ownerAddress || !tokenAddress) return res.status(400).json({ error: 'label, ownerAddress, tokenAddress required' });
+
+    // confirm current owner of parentName on Sepolia
+    const currentOwner = await web3ForEns.eth.ens.owner(parentName); // web3.js wrapper
+    if(!currentOwner || currentOwner.toLowerCase() !== ensAccount.toLowerCase()) {
+      return res.status(400).json({ error: `ENS owner mismatch. The backend's ENS owner ${ensAccount} is not the owner of ${parentName} on Sepolia. Current owner: ${currentOwner}. Ensure you own the parent name on Sepolia or run using your ENS owner key.`});
+    }
+
+    // create subnode and set owner to ownerAddress
+    // web3.js ENS helper: setSubnodeOwner(name, label, address)
+    console.log('[ENS] creating subnode', label, 'under', parentName);
+    const tx = await web3ForEns.eth.ens.setSubnodeOwner(parentName, label, ownerAddress, { from: ensAccount });
+    // set address record for the new subname
+    const subname = `${label}.${parentName}`;
+    const tx2 = await web3ForEns.eth.ens.setAddress(subname, tokenAddress, { from: ensAccount });
+
+    return res.json({ ok: true, subname, tx, tx2 });
+  } catch (err) {
+    console.error('ens register err', err?.message || err);
+    res.status(500).json({ error: String(err?.message || err) });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`EasyDeploy backend listening on ${PORT}`);
