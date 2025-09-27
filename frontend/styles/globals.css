@@ -26,14 +26,14 @@
     --radius: 0.5rem;
 
     /* Brand Colors */
-    --brand: 259 94% 51%; /* Vibrant purple */
+    --brand: 266 100% 64%; /* Electric purple */
     --brand-foreground: 0 0% 100%;
-    --accent: 326 100% 60%; /* Electric pink */
-    --gradient-start: 259 94% 51%;
-    --gradient-end: 169 100% 50%; /* Electric cyan */
-    --success: 142 71% 45%; /* Vibrant green */
-    --info: 199 89% 48%; /* Bright blue */
-    --highlight: 35 92% 58%; /* Warm amber */
+    --accent: 330 100% 65%; /* Hot pink */
+    --gradient-start: 266 100% 64%;
+    --gradient-end: 190 100% 50%; /* Neon cyan */
+    --success: 142 100% 45%; /* Electric green */
+    --info: 217 100% 65%; /* Electric blue */
+    --highlight: 35 100% 60%; /* Bright amber */
   }
 
   .dark {
@@ -65,14 +65,42 @@
   }
   body {
     @apply bg-background text-foreground antialiased;
+    background: radial-gradient(circle at 50% 50%, hsl(240, 30%, 15%), hsl(260, 40%, 20%));
+    color: hsl(0, 0%, 95%);
+    font-family: 'Inter', sans-serif;
+    overflow-x: hidden;
   }
   /* Glass card styling */
   .glass-card {
     @apply backdrop-blur-md bg-opacity-10 bg-white border border-white/10;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(12px);
+    border-radius: 16px;
   }
   /* Button gradients */
   .btn-gradient {
-    @apply bg-gradient-to-r from-[hsl(var(--brand))] to-[hsl(var(--accent))] text-white;
+    @apply bg-gradient-to-r from-[hsl(var(--brand))] to-[hsl(var(--accent))] text-white font-semibold;
+    box-shadow: 0 0 20px rgba(var(--brand), 0.5);
+    transition: all 0.3s ease;
+  }
+  .btn-gradient:hover {
+    filter: brightness(1.2);
+    transform: translateY(-2px);
+    box-shadow: 0 0 30px rgba(var(--brand), 0.7);
+  }
+  .btn-glow {
+    animation: glow 2s ease-in-out infinite;
+  }
+  @keyframes glow {
+    0%, 100% { 
+      box-shadow: 0 0 20px rgba(var(--brand), 0.5);
+    }
+    50% { 
+      box-shadow: 0 0 30px rgba(var(--brand), 0.8),
+                 0 0 50px rgba(var(--accent), 0.3);
+    }
   }
   /* Custom scrollbar */
   ::-webkit-scrollbar {
@@ -89,12 +117,77 @@
   input:focus, textarea:focus {
     @apply ring-2 ring-[hsl(var(--brand))] outline-none;
   }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Space Grotesk', sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: hsl(240, 100%, 80%);
+    text-shadow: 0 0 10px hsl(240, 100%, 50%), 0 0 20px hsl(240, 100%, 30%);
+  }
+
+  .neon-text {
+    color: hsl(330, 100%, 70%);
+    text-shadow: 0 0 5px hsl(330, 100%, 70%), 0 0 10px hsl(330, 100%, 70%), 0 0 20px hsl(330, 100%, 70%);
+  }
+
+  .neon-button {
+    background: linear-gradient(90deg, hsl(240, 100%, 50%), hsl(330, 100%, 50%));
+    color: white;
+    border: none;
+    padding: 14px 28px;
+    font-size: 1rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    border-radius: 10px;
+    box-shadow: 0 0 15px hsl(240, 100%, 50%), 0 0 30px hsl(330, 100%, 50%);
+    transition: transform 0.3s, box-shadow 0.3s;
+  }
+
+  .neon-button:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 25px hsl(240, 100%, 50%), 0 0 50px hsl(330, 100%, 50%);
+  }
+
+  .neon-button:active {
+    transform: scale(0.95);
+  }
+
+  .animated-bg {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle, rgba(255,255,255,0.1) 1px, transparent 1px);
+    background-size: 50px 50px;
+    animation: move-bg 10s linear infinite;
+    z-index: -1;
+  }
+
+  @keyframes move-bg {
+    0% {
+      background-position: 0 0;
+    }
+    100% {
+      background-position: 100px 100px;
+    }
+  }
 }
 
 /* Custom animations for the project */
 @keyframes float {
   0%, 100% { transform: translateY(0px); }
   50% { transform: translateY(-20px); }
+}
+
+@keyframes pulse-subtle {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.95; transform: scale(0.98); }
+}
+
+.animate-pulse-subtle {
+  animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 
 @keyframes particle {

@@ -11,6 +11,8 @@ import { Toast } from "@/components/ui/toast";
 import { LoadingSpinner } from "@/components/ui/loading-spinner";
 import { SuccessPopup } from "@/components/ui/success-popup";
 import { motion, useScroll, useInView } from "framer-motion";
+import Confetti from "react-confetti";
+
 // Minimal ABI for factory
 const FACTORY_ABI = [
   "function deployERC20(string name, string symbol, uint256 supply) public returns (address)",
@@ -31,6 +33,7 @@ export default function Home() {
   const [toast, setToast] = useState(null);
   const [showSuccess, setShowSuccess] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
+  const [confettiActive, setConfettiActive] = useState(false);
   
   const tokenPreviewRef = useRef(null);
   const isPreviewInView = useInView(tokenPreviewRef);
@@ -47,21 +50,23 @@ export default function Home() {
     try {
       const r = await axios.post(`${BACKEND}/generate-token`, { description });
       setGen(r.data.generated);
-      
+
+      // Trigger confetti animation for successful generation
+      setTimeout(() => {
+        setConfettiActive(true);
+        setTimeout(() => setConfettiActive(false), 2000);
+      }, 500);
+
       // Scroll to token preview
-      if (tokenPreviewRef.current) {
-        tokenPreviewRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
-      
-      // Show success toast
+      tokenPreviewRef.current?.scrollIntoView({ behavior: "smooth" });
+    } catch (error) {
+      console.error("Error generating token:", error);
+
+      // Show error popup
       setToast({
-        type: 'success',
-        message: 'Token details generated successfully!'
-      });
-    } catch (e) {
-      setToast({
-        type: 'error',
-        message: "Generate failed: " + (e?.response?.data?.error || e.message)
+        title: "Error",
+        message: "Failed to generate token. Please try again.",
+        type: "error",
       });
     } finally {
       setLoadingGenerate(false);
@@ -215,18 +220,15 @@ async function deploy() {
   const bgId = useRef("bg-deco");
 
   return (
-    <main className="relative min-h-screen bg-background text-foreground">
-      {/* Decorative, non-interactive background */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 bg-[radial-gradient(1200px_600px_at_50%_-50%,_color(display-p3_0.15_0.35_1/_0.12),_transparent),radial-gradient(800px_400px_at_10%_120%,_color(display-p3_0_0.8_0.9/_0.10),_transparent)]"
-      />
+    <main className="relative min-h-screen text-foreground">
+      {/* Animated Background */}
+      <div className="animated-bg" aria-hidden="true"></div>
 
-      {/* Top bar */}
-      <header className="sticky top-0 z-10 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
+      {/* Top Bar */}
+      <header className="sticky top-0 z-10 backdrop-blur-md bg-background/60 border-b border-border">
         <div className="mx-auto max-w-6xl px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="h-8 w-8 rounded-md bg-gradient-to-r from-[var(--brand)] to-[var(--accent)]" />
+            <div className="h-8 w-8 rounded-md bg-gradient-to-r from-[hsl(240,100%,50%)] to-[hsl(330,100%,50%)]" />
             <div className="text-balance">
               <h1 className="text-lg font-semibold">EasyDeploy AI</h1>
               <p className="text-xs text-muted-foreground">Sepolia Network</p>
@@ -238,18 +240,16 @@ async function deploy() {
         </div>
       </header>
 
-      {/* Hero */}
+      {/* Hero Section */}
       <section className="mx-auto max-w-6xl px-4 pt-10 pb-8 md:pt-16 md:pb-12">
         <div className="grid gap-6 md:grid-cols-2 md:items-center">
           <div className="space-y-4">
-            <p className="text-xl text-pretty font-medium text-muted-foreground">
-              AI‑Powered
-            </p>
-            <h2 className="text-pretty text-4xl font-extrabold leading-tight md:text-5xl">
+            <p className="text-xl font-medium text-muted-foreground">AI‑Powered</p>
+            <h2 className="text-4xl font-extrabold leading-tight md:text-5xl">
               Token Creation
               without code
             </h2>
-            <p className="text-pretty text-muted-foreground leading-relaxed">
+            <p className="text-muted-foreground leading-relaxed">
               Describe your idea, and we’ll generate, deploy, and name your
               ERC‑20 with an elegant, guided flow.
             </p>
@@ -273,7 +273,7 @@ async function deploy() {
             <textarea
               id="desc"
               rows={6}
-              className="w-full rounded-lg border border-border bg-background/60 p-4 outline-none focus:ring-2 focus:ring-[var(--brand)]"
+              className="w-full rounded-lg border border-border bg-background/60 p-4 outline-none focus:ring-2 focus:ring-[hsl(240,100%,50%)]"
               placeholder="Example: A community-driven coffee meme token with deflationary burns, LP incentives, and governance."
               value={description}
               onChange={(e) => setDescription(e.target.value)}
@@ -284,86 +284,29 @@ async function deploy() {
               <span>{description.length}/500</span>
             </div>
             <div className="mt-4 flex gap-3 sm:grid-cols-3">
-              <Button
-                className="w-full bg-gradient-to-r from-[var(--brand)] to-[var(--accent)] text-primary-foreground hover:opacity-95"
+              <button
+                className="neon-button w-full"
                 onClick={generateToken}
                 disabled={loadingGenerate || loadingDeploy || !description.trim()}
               >
                 {loadingGenerate ? "AI thinking…" : "Generate"}
-              </Button>
-              {/* <Button
-                variant="secondary"
-                className="w-full"
-                onClick={uploadLogo}
-                disabled={!gen || loading}
-              >
-                Upload Logo
-              </Button> */}
-              <Button
-                className="w-full bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50"
-                onClick={deploy}
-                disabled={!gen || !walletClient || loadingGenerate || loadingDeploy || !FACTORY_ADDRESS}
-                title={
-                  !FACTORY_ADDRESS
-                    ? "Missing NEXT_PUBLIC_FACTORY_ADDRESS"
-                    : undefined
-                }
-              >
-                {loadingDeploy ? (
-                  <LoadingSpinner text="Deploying..." />
-                ) : (
-                  "Deploy"
-                )}
-              </Button>
+              </button>
             </div>
           </div>
         </div>
       </section>
 
-      {/* How it works */}
+      {/* Token Preview */}
       <section className="mx-auto max-w-6xl px-4 pb-10 md:pb-16">
-        <h3 className="text-xl font-semibold mb-4">How it works</h3>
-        <div className="grid gap-4 md:grid-cols-4">
-          {[
-            { t: "Connect Wallet", d: "Securely link your Web3 wallet" },
-            { t: "Describe Vision", d: "Share your token concept with AI" },
-            { t: "AI Generation", d: "We create specs and metadata" },
-            { t: "Deploy & Launch", d: "Instant contract + ENS" },
-          ].map((s, i) => (
-            <div
-              key={i}
-              className="rounded-xl border border-border p-4 bg-card/40"
-            >
-              <div className="text-xs text-muted-foreground mb-1">
-                Step {String(i + 1).padStart(2, "0")}
-              </div>
-              <div className="font-medium">{s.t}</div>
-              <div className="text-sm text-muted-foreground mt-1">{s.d}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Success Popup */}
-      {showSuccess && (
-        <SuccessPopup
-          title="Congratulations! 🎉"
-          message="Your token has been successfully deployed!"
-          onClose={() => setShowSuccess(false)}
-        />
-      )}
-
-      {/* Token preview */}
-      <section className="mx-auto max-w-6xl px-4 pb-10 md:pb-16" ref={tokenPreviewRef}>
         <div className="flex items-center gap-2 mb-3">
-          <div className="h-6 w-6 rounded-md bg-gradient-to-r from-[var(--brand)] to-[var(--accent)]" />
+          <div className="h-6 w-6 rounded-md bg-gradient-to-r from-[hsl(240,100%,50%)] to-[hsl(330,100%,50%)]" />
           <h4 className="font-semibold">Token Preview</h4>
         </div>
 
         {gen ? (
-          <div className="rounded-xl border border-border p-6 bg-card/50">
+          <div className="glass-card rounded-xl border border-border p-6 bg-card/50">
             <div className="flex flex-col gap-4 md:flex-row md:items-center">
-              <div className="h-16 w-16 rounded-lg bg-gradient-to-r from-[var(--brand)] to-[var(--accent)] text-background grid place-items-center text-xl font-bold">
+              <div className="h-16 w-16 rounded-lg bg-gradient-to-r from-[hsl(240,100%,50%)] to-[hsl(330,100%,50%)] text-background grid place-items-center text-xl font-bold">
                 {(gen.symbol?.charAt(0) || "T").toUpperCase()}
               </div>
               <div className="flex-1">
@@ -413,6 +356,16 @@ async function deploy() {
                 <div className="font-mono text-sm break-all">{metaUri}</div>
               </div>
             )}
+
+            <div className="mt-6 flex justify-end">
+              <button
+                className="neon-button"
+                onClick={deploy}
+                disabled={loadingDeploy || !gen}
+              >
+                {loadingDeploy ? "Deploying..." : "Deploy"}
+              </button>
+            </div>
           </div>
         ) : (
           <div className="rounded-xl border border-border p-6 bg-card/40 text-sm text-muted-foreground">
@@ -422,118 +375,17 @@ async function deploy() {
         )}
       </section>
 
-      {/* Deployment status */}
-      <section className="mx-auto max-w-6xl px-4 pb-16">
-        <div className="flex items-center gap-2 mb-3">
-          <div className="h-6 w-6 rounded-md bg-foreground" />
-          <h4 className="font-semibold">Deployment Status</h4>
-        </div>
-
-        {deployed ? (
-          <div className="rounded-xl border border-border p-6 bg-card/50 space-y-4">
-            <div className="text-green-400 font-medium">
-              Successfully deployed on Sepolia
-            </div>
-            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-              <div className="rounded-lg border border-border p-3">
-                <div className="text-xs text-muted-foreground mb-1">
-                  Contract Address
-                </div>
-                <div className="font-mono text-sm break-all">
-                  {deployed.address}
-                </div>
-              </div>
-              <a
-                className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-card/70"
-                target="_blank"
-                href={`https://sepolia.etherscan.io/address/${deployed.address}`}
-                rel="noreferrer"
-              >
-                View on Etherscan
-              </a>
-            </div>
-
-            {ensSubname && (
-              <div className="rounded-lg border border-border p-3">
-                <div className="text-xs text-muted-foreground mb-1">
-                  ENS Name
-                </div>
-                <div className="font-mono text-sm">{ensSubname}</div>
-              </div>
-            )}
-
-            <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-              <div className="rounded-lg border border-border p-3">
-                <div className="text-xs text-muted-foreground mb-1">
-                  Transaction Hash
-                </div>
-                <div className="font-mono text-sm break-all">
-                  {deployed.txHash}
-                </div>
-              </div>
-              <a
-                className="rounded-lg border border-border px-3 py-2 text-sm hover:bg-card/70"
-                target="_blank"
-                href={`https://sepolia.etherscan.io/tx/${deployed.txHash}`}
-                rel="noreferrer"
-              >
-                View on Etherscan
-              </a>
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-xl border border-border p-6 bg-card/40 text-sm text-muted-foreground">
-            Ready to deploy your token. Generate and configure above.
-          </div>
-        )}
-      </section>
-      {toast && (
-        <Toast
-          message={toast.message}
-          type={toast.type}
-          onClose={() => setToast(null)}
-        />
-      )}
-      {/* Success Popup */}
-      {showSuccess && deployed && (
+      {showSuccess && (
         <SuccessPopup
-          title="🎉 Token Deployed Successfully!"
-          message={
-            <div className="space-y-4">
-              <p>Your token has been deployed and is ready for trading!</p>
-              <div className="bg-card/30 p-4 rounded-lg space-y-2">
-                <div>
-                  <span className="text-muted-foreground">Token Address:</span>
-                  <code className="block text-xs bg-background/50 p-2 rounded mt-1">{deployed.address}</code>
-                </div>
-                {ensSubname && (
-                  <div>
-                    <span className="text-muted-foreground">ENS Name:</span>
-                    <code className="block text-xs bg-background/50 p-2 rounded mt-1">{ensSubname}</code>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-3 mt-4">
-                <Button
-                  className="flex-1"
-                  variant="secondary"
-                  onClick={() => window.open(`https://sepolia.etherscan.io/address/${deployed.address}`, '_blank')}
-                >
-                  View on Etherscan
-                </Button>
-                <Button
-                  className="flex-1"
-                  variant="secondary"
-                  onClick={() => window.open(`https://app.1inch.io/#/1/swap/ETH/${deployed.address}`, '_blank')}
-                >
-                  Trade on 1inch
-                </Button>
-              </div>
-            </div>
-          }
+          title="Token Deployed!"
+          message={`Your token has been successfully deployed at address: ${deployed || "Unknown"}`}
+          actionLabel="Continue"
+          onAction={() => router.push(`/token/${deployed}`)}
           onClose={() => setShowSuccess(false)}
         />
       )}
+
+      {confettiActive && <Confetti width={window.innerWidth} height={window.innerHeight} />}
     </main>
   );
 }
