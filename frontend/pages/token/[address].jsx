@@ -15,20 +15,69 @@ export default function TokenPage() {
   const [loading, setLoading] = useState(true);
   const [price, setPrice] = useState(null);
   const [swapLink, setSwapLink] = useState('');
+  const [referencePrice, setReferencePrice] = useState(null);
+
   
   const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
   const { address } = router.query;
 
   useEffect(() => {
-    if (address) {
-      fetchTokenData();
-      fetchPrice();
-      generateSwapLink();
+    const controller = new AbortController();
+    const { signal } = controller;
+
+    async function initializeTokenData() {
+      if (address) {
+        setLoading(true);
+        try {
+          // Fetch token data first with abort signal
+          const data = await fetchTokenDataFromSepolia(address, signal);
+          if (!signal.aborted) {
+            setTokenData({
+              ...data,
+              address,
+              description: 'A token fetched from Sepolia',
+              metadataUri: 'N/A',
+              ensName: `${data.symbol.toLowerCase()}.easydeployai.eth`
+            });
+            // Then fetch price data
+            await fetchPrice();
+          }
+        } catch (error) {
+          if (!signal.aborted) {
+            console.error("Error initializing token data:", error);
+          }
+        } finally {
+          if (!signal.aborted) {
+            setLoading(false);
+          }
+        }
+      }
     }
+    
+    initializeTokenData();
+
+    // Cleanup function to cancel ongoing requests
+    return () => {
+      controller.abort();
+    };
   }, [address]);
 
-  async function fetchTokenDataFromSepolia(address) {
-    const provider = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL);
+  async function fetchTokenDataFromSepolia(address, signal) {
+    let provider;
+    let retries = 3;
+    
+    while (retries > 0) {
+        try {
+            provider = new ethers.JsonRpcProvider(process.env.NEXT_PUBLIC_SEPOLIA_RPC_URL);
+            await provider.getNetwork(); // Test the connection
+            break;
+        } catch (error) {
+            retries--;
+            if (retries === 0) throw new Error('Failed to connect to Sepolia RPC');
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
+        }
+    }
+
     const ERC20_ABI = [
         "function name() view returns (string)",
         "function symbol() view returns (string)",
@@ -38,12 +87,20 @@ export default function TokenPage() {
 
     const contract = new ethers.Contract(address, ERC20_ABI, provider);
 
-    const [name, symbol, totalSupply, decimals] = await Promise.all([
-        contract.name(),
-        contract.symbol(),
-        contract.totalSupply(),
-        contract.decimals()
-    ]);
+    // Check if request was cancelled
+    if (signal?.aborted) throw new Error('Request cancelled');
+
+    // Make sequential requests instead of batch requests
+    const name = await contract.name();
+    if (signal?.aborted) throw new Error('Request cancelled');
+    
+    const symbol = await contract.symbol();
+    if (signal?.aborted) throw new Error('Request cancelled');
+    
+    const decimals = await contract.decimals();
+    if (signal?.aborted) throw new Error('Request cancelled');
+    
+    const totalSupply = await contract.totalSupply();
 
     return {
         name,
@@ -70,17 +127,38 @@ export default function TokenPage() {
     }
   }
 
+  // async function fetchPrice() {
+  //   try {
+  //     const response = await axios.get(`${BACKEND}/pyth/price?price_id=${address}`);
+  //     const tokenPrice = response.data.price
+  //     console.log("Price: "+ tokenPrice)
+  //     setPrice(tokenPrice);
+  //   } catch (error) {
+  //     console.error('Error fetching price:', error);
+  //     // Fallback price
+  //     setPrice({ source: 'fallback', price: 2500 });
+  //   }
+  // }
   async function fetchPrice() {
     try {
-      const response = await axios.get(`${BACKEND}/pyth/price`);
-      const tokenPrice = response.data.prices.find(p => p.id === address)?.price || 'N/A';
-      setPrice(tokenPrice);
+        // Get ETH/USD price as reference
+        const response = await axios.get(`${BACKEND}/pyth/price/ETH/USD`);
+        if (response.data.ok) {
+            setReferencePrice(response.data.price);
+            
+            // For newly deployed tokens, we show that price feed is not available
+            // Note: In the future, we could:
+            // 1. Check if token has liquidity pairs with ETH/USDC
+            // 2. Get price from DEX if liquidity exists
+            // 3. Calculate token price based on the liquidity pair and reference price
+            setPrice("Price feed not available - New token");
+        }
     } catch (error) {
-      console.error('Error fetching price:', error);
-      // Fallback price
-      setPrice({ source: 'fallback', price: 2500 });
+        console.error('Error fetching price:', error);
+        setPrice("Price data unavailable");
+        setReferencePrice(null);
     }
-  }
+}
 
   async function generateSwapLink() {
     try {
@@ -138,7 +216,14 @@ export default function TokenPage() {
             <p><strong>Description:</strong> {tokenData.description}</p>
             <p><strong>Metadata URI:</strong> <a href={tokenData.metadataUri} target="_blank" rel="noopener noreferrer">{tokenData.metadataUri}</a></p>
             <p><strong>ENS Name:</strong> {tokenData.ensName}</p>
-            <p><strong>Price:</strong> {price ? `$${price}` : "Fetching..."}</p>
+            <div>
+                <p><strong>Token Price:</strong> {price}</p>
+                {referencePrice && (
+                    <p className="text-sm text-muted-foreground">
+                        Reference ETH/USD: ${referencePrice.toLocaleString()}
+                    </p>
+                )}
+            </div>
             <Button onClick={() => window.open(swapLink, "_blank")}>Swap Token</Button>
           </CardContent>
         </Card>

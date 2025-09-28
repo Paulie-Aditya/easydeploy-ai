@@ -9,6 +9,7 @@
   "dependencies": {
     "@ensdomains/eth-ens-namehash": "^2.0.15",
     "@google/genai": "^1.21.0",
+    "@pythnetwork/client": "^2.22.1",
     "@pythnetwork/price-service-client": "^1.0.0",
     "@truffle/hdwallet-provider": "^2.1.4",
     "axios": "^1.4.0",

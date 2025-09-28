@@ -18,6 +18,7 @@ const { GoogleGenAI } = require('@google/genai'); // Gemini SDK
 const { NFTStorage, File } = require('nft.storage'); 
 const ethers = require('ethers');
 const namehash = require("@ensdomains/eth-ens-namehash"); // npm i @ensdomains/eth-ens-namehash
+const { PythHttpClient } = require('@pythnetwork/client'); // Pyth SDK
 
 const app = express();
 app.use(cors());
@@ -184,6 +185,54 @@ app.post("/ens/register-subname", async (req, res) => {
 
         res.json({ ok: true, subname: `${label.toLowerCase()}.${parentName}`, resolver: resolverAddress });
     } catch (err) { console.error(err); res.status(500).json({ error: String(err) }); }
+});
+
+const PRICE_FEEDS = {
+    "ETH/USD": "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace",
+    "BTC/USD": "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43",
+    "USDC/USD": "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a"
+};
+
+app.get('/pyth/price/:feed', async (req, res) => {
+    try {
+        const { feed } = req.params;
+        
+        // Get price feed ID
+        const priceId = PRICE_FEEDS[feed] || feed;
+        
+        // Use Pyth's Hermes API to get latest price
+        const PYTH_ENDPOINT = "https://hermes.pyth.network/api/latest_price_feeds";
+        const pythResponse = await fetch(`${PYTH_ENDPOINT}?ids[]=${priceId}`);
+        const data = await pythResponse.json();
+
+        if (!data || data.length === 0) {
+            return res.status(404).json({ error: "Price feed not found" });
+        }
+
+        const priceFeed = data[0];
+        const price = priceFeed.price;
+        const conf = priceFeed.conf;
+        const expo = priceFeed.expo;
+        const publishTime = priceFeed.publish_time;
+
+        // Calculate the actual price considering the exponent
+        const actualPrice = price * Math.pow(10, expo);
+        const confidence = conf * Math.pow(10, expo);
+
+        res.json({
+            ok: true,
+            feed,
+            priceId,
+            price: actualPrice,
+            confidence,
+            exponent: expo,
+            publishTime,
+            raw: priceFeed
+        });
+    } catch (err) {
+        console.error('Pyth price fetch error:', err);
+        res.status(500).json({ error: String(err) });
+    }
 });
 
 app.listen(PORT, () => console.log(`Backend running on ${PORT}`));
