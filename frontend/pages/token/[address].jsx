@@ -25,6 +25,31 @@ export default function TokenPage() {
     const controller = new AbortController();
     const { signal } = controller;
 
+    async function fetchPrice() {
+      try {
+          // Get ETH/USD price as reference
+          // The backend expects the feed as a single parameter, so we need to encode the slash
+          const feed = encodeURIComponent('ETH/USD');
+          const response = await axios.get(`${BACKEND}/pyth/price/${feed}`);
+          if (response.data.ok && !signal.aborted) {
+              setReferencePrice(response.data.price);
+              
+              // For newly deployed tokens, we show that price feed is not available
+              // Note: In the future, we could:
+              // 1. Check if token has liquidity pairs with ETH/USDC
+              // 2. Get price from DEX if liquidity exists
+              // 3. Calculate token price based on the liquidity pair and reference price
+              setPrice("Price feed not available - New token");
+          }
+      } catch (error) {
+          if (!signal.aborted) {
+            console.error('Error fetching price:', error);
+            setPrice("Price data unavailable");
+            setReferencePrice(null);
+          }
+      }
+    }
+
     async function initializeTokenData() {
       if (address) {
         setLoading(true);
@@ -60,7 +85,7 @@ export default function TokenPage() {
     return () => {
       controller.abort();
     };
-  }, [address]);
+  }, [address, BACKEND]);
 
   async function fetchTokenDataFromSepolia(address, signal) {
     let provider;
@@ -127,38 +152,6 @@ export default function TokenPage() {
     }
   }
 
-  // async function fetchPrice() {
-  //   try {
-  //     const response = await axios.get(`${BACKEND}/pyth/price?price_id=${address}`);
-  //     const tokenPrice = response.data.price
-  //     console.log("Price: "+ tokenPrice)
-  //     setPrice(tokenPrice);
-  //   } catch (error) {
-  //     console.error('Error fetching price:', error);
-  //     // Fallback price
-  //     setPrice({ source: 'fallback', price: 2500 });
-  //   }
-  // }
-  async function fetchPrice() {
-    try {
-        // Get ETH/USD price as reference
-        const response = await axios.get(`${BACKEND}/pyth/price/ETH/USD`);
-        if (response.data.ok) {
-            setReferencePrice(response.data.price);
-            
-            // For newly deployed tokens, we show that price feed is not available
-            // Note: In the future, we could:
-            // 1. Check if token has liquidity pairs with ETH/USDC
-            // 2. Get price from DEX if liquidity exists
-            // 3. Calculate token price based on the liquidity pair and reference price
-            setPrice("Price feed not available - New token");
-        }
-    } catch (error) {
-        console.error('Error fetching price:', error);
-        setPrice("Price data unavailable");
-        setReferencePrice(null);
-    }
-}
 
   async function generateSwapLink() {
     try {
